@@ -1,0 +1,7 @@
+node_modules
+.expo
+.git
+.env
+.env.local
+README.md
+docs
