@@ -6,7 +6,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, isFirebaseConfigured } from '../src/config/firebaseConfig';
 import Login from '../screens/Login';
 import SignUp from '../screens/SignUp';
-import ForgotPassword from '../screens/ForgotPassword'
+import ForgotPassword from '../screens/ForgotPassword';
 import Home from '../screens/Home';
 
 const Stack = createStackNavigator();
@@ -30,19 +30,39 @@ export default function Navigation() {
   }
 
   if (user === undefined) {
-    return <View style={styles.center}><ActivityIndicator size="large" /></View>;
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
   }
 
   return (
     <NavigationContainer>
       <Stack.Navigator>
         {user ? (
-          <Stack.Screen name="Home" component={Home} options={{ title: 'Inicio' }} />
+          <Stack.Screen 
+            name="Home" 
+            component={Home} 
+            options={{ title: 'Inicio' }} 
+          />
         ) : (
           <>
-            <Stack.Screen name="Login" component={Login} options={{ title: 'Iniciar sesión' }} />
-            <Stack.Screen name="SignUp" component={SignUp} options={{ title: 'Registro' }} />
-            <Stack.Sreeen name="ForgotPassword" component={ForgotPassword} options={{ title: 'Contraseña Olvidara'}}/>
+            <Stack.Screen 
+              name="Login" 
+              component={Login} 
+              options={{ title: 'Iniciar sesión' }} 
+            />
+            <Stack.Screen 
+              name="SignUp" 
+              component={SignUp} 
+              options={{ title: 'Registro' }} 
+            />
+            <Stack.Screen 
+              name="ForgotPassword" 
+              component={ForgotPassword} 
+              options={{ title: 'Recuperar Contraseña' }} 
+            />
           </>
         )}
       </Stack.Navigator>
@@ -51,6 +71,14 @@ export default function Navigation() {
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  message: { textAlign: 'center', fontSize: 16 },
+  center: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    padding: 24 
+  },
+  message: { 
+    textAlign: 'center', 
+    fontSize: 16 
+  },
 });
