@@ -98,7 +98,10 @@ export default function Login({ navigation }) {
             <FontAwesome name="arrow-right" size={16} color="#FFF" style={styles.arrowIcon} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.forgotPasswordContainer}>
+          <TouchableOpacity 
+          style={styles.forgotPasswordContainer}
+            onPress={() => navigation.navigate('ForgotPassword')}
+          >
             <Text style={styles.forgotPasswordText}>¿Olvidaste tu contraseña?</Text>
           </TouchableOpacity>
         </View>

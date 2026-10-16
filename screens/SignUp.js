@@ -92,7 +92,6 @@ export default function SignUp({ navigation }) {
         <Text style={styles.mainTitle}>Regístrate</Text>
 
         <View style={styles.card}>
-          {/* Campo Nombre */}
           <Text style={styles.label}>Nombre</Text>
           <View style={styles.inputBox}>
             <Feather name="user" size={18} color="#EE684D" style={styles.inputIcon} />
