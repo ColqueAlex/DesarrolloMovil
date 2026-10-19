@@ -7,6 +7,8 @@ import { auth, isFirebaseConfigured } from '../src/config/firebaseConfig';
 import Login from '../screens/Login';
 import SignUp from '../screens/SignUp';
 import ForgotPassword from '../screens/ForgotPassword';
+import RecoveryCode from "../screens/RecoveryCode"
+import NewPassword from '../screens/NewPassword';
 import Home from '../screens/Home';
 
 const Stack = createStackNavigator();
@@ -62,6 +64,17 @@ export default function Navigation() {
               name="ForgotPassword" 
               component={ForgotPassword} 
               options={{ title: 'Recuperar Contraseña' }} 
+            />
+            {/* AGREGADAS AQUÍ */}
+            <Stack.Screen 
+              name="RecoveryCode" 
+              component={RecoveryCode} 
+              options={{ title: 'Ingresar Código' }} 
+            />
+            <Stack.Screen 
+              name="NewPassword" 
+              component={NewPassword} 
+              options={{ title: 'Nueva Contraseña' }} 
             />
           </>
         )}

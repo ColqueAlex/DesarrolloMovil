@@ -28,9 +28,19 @@ export default function ForgotPassword({ navigation }) {
       await sendPasswordResetEmail(auth, email.trim());
       Alert.alert(
         'Correo enviado',
-        'Se ha enviado un enlace a su correo para reestablecer la contraseña.'
+        'Se ha enviado las instrucciones a su correo. ¿Qué desea hacer?',
+        [
+          {
+            text: 'Ingresar Código',
+            onPress: () => navigation.navigate('RecoveryCode', { email: email.trim() }),
+          },
+          {
+            text: 'Volver a Login',
+            onPress: () => navigation.navigate('Login'),
+          },
+        ],
+        { cancelable: false }
       );
-      navigation.navigate('Login');
     } catch (error) {
       console.error('Error al enviar correo de recuperación:', error);
       let errorMessage = 'No se pudo enviar el correo de recuperación.';
