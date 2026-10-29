@@ -18,8 +18,13 @@ import { auth } from '../src/config/firebaseConfig';
 
 const { width } = Dimensions.get('window');
 
-export default function Home() {
+export default function Home({ navigation }) {
   const [menuVisible, setMenuVisible] = useState(false);
+
+  const openInventory = () => {
+    setMenuVisible(false);
+    navigation.navigate('Inventory');
+  };
 
   const handleLogOut = async () => {
     if (!auth) {
@@ -149,7 +154,14 @@ export default function Home() {
 
         <View style={styles.gridContainer}>
           {menuOptions.map((item) => (
-            <TouchableOpacity key={item.id} style={styles.gridCard} activeOpacity={0.7}>
+            <TouchableOpacity
+              key={item.id}
+              style={styles.gridCard}
+              activeOpacity={0.7}
+              onPress={item.id === '2' ? openInventory : undefined}
+              accessibilityRole={item.id === '2' ? 'button' : undefined}
+              accessibilityLabel={item.id === '2' ? 'Abrir productos del almacén' : undefined}
+            >
               <View style={styles.gridHeader}>
                 <View style={[styles.gridIconContainer, { backgroundColor: item.bgColor }]}>
                   {renderIcon(item.iconFamily, item.iconName, item.iconColor)}
@@ -188,7 +200,13 @@ export default function Home() {
 
             <ScrollView style={styles.drawerItemsContainer} showsVerticalScrollIndicator={false}>
               {drawerItems.map((item) => (
-                <TouchableOpacity key={item.id} style={styles.drawerButton} activeOpacity={0.7}>
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.drawerButton}
+                  activeOpacity={0.7}
+                  onPress={item.title === 'Producto' ? openInventory : undefined}
+                  accessibilityRole={item.title === 'Producto' ? 'button' : undefined}
+                >
                   <View style={styles.drawerIconBox}>
                     <MaterialCommunityIcons name={item.icon} size={22} color="#FFFFFF" />
                   </View>

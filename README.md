@@ -37,6 +37,10 @@ Si `npm ci` indica que faltan archivos o que el lockfile no coincide, usar `npm 
 4. Registrar la aplicación y conservar el objeto `firebaseConfig`.
 5. Entrar en **Authentication > Método de acceso**.
 6. Agregar y habilitar **Correo electrónico/contraseña**.
+7. En **Firestore Database**, crear una base de datos para el proyecto.
+8. Configurar reglas de Firestore para que los usuarios autenticados puedan leer, registrar, actualizar y eliminar documentos en `productos`. No dejes reglas de acceso público en producción.
+
+La colección `productos` y sus documentos se crean automáticamente al registrar el primer producto desde la aplicación.
 
 ## 3. Agregar la configuración Firebase
 
