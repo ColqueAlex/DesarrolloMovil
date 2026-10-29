@@ -29,6 +29,8 @@ import { auth, db } from '../src/config/firebaseConfig';
 
 const filtros = ['TODAS', 'Nombre', 'Lote'];
 const { width } = Dimensions.get('window');
+const contieneLetras = (valor) => /\p{L}/u.test(valor);
+const categoriaValida = (valor) => /^[\p{L}\p{M}\s]+$/u.test(valor);
 
 const drawerItems = [
   { id: '1', title: 'Producto', icon: 'cube-outline' },
@@ -185,6 +187,28 @@ export default function GestionInventario({ navigation, route }) {
       return;
     }
 
+    if (!contieneLetras(nombre)) {
+      Alert.alert('Nombre inválido', 'El nombre debe incluir al menos una letra; no puede contener solo números.');
+      return;
+    }
+
+    if (!productoEditando && !/^\d+$/.test(lote)) {
+      Alert.alert('Lote inválido', 'El lote debe contener solo números.');
+      return;
+    }
+
+    const categoria = formulario.categoria.trim();
+    if (categoria && !categoriaValida(categoria)) {
+      Alert.alert('Categoría inválida', 'La categoría solo puede contener letras y espacios.');
+      return;
+    }
+
+    const marca = formulario.marca.trim();
+    if (marca && !contieneLetras(marca)) {
+      Alert.alert('Marca inválida', 'La marca debe incluir al menos una letra; no puede contener solo números.');
+      return;
+    }
+
     if (!Number.isInteger(stock) || stock < 0) {
       Alert.alert('Stock inválido', 'El stock debe ser un número entero igual o mayor que cero.');
       return;
@@ -235,8 +259,8 @@ export default function GestionInventario({ navigation, route }) {
         precio,
         estado: formulario.estado,
         fechaVencimiento,
-        categoria: formulario.categoria.trim(),
-        marca: formulario.marca.trim(),
+        categoria,
+        marca,
       };
 
       if (productoEditando) {
