@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import {View,Text,TextInput,TouchableOpacity,StyleSheet,Alert,Image,ScrollView,KeyboardAvoidingView,Platform,} from 'react-native';
 import { FontAwesome, Feather } from '@expo/vector-icons';
-import { auth } from '../src/config/firebaseConfig';
+import { auth, db } from '../src/config/firebaseConfig';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 
 export default function SignUp({ navigation }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [dni, setDni] = useState('');
+  const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -19,6 +21,7 @@ export default function SignUp({ navigation }) {
       !firstName.trim() ||
       !lastName.trim() ||
       !dni.trim() ||
+      !phone.trim() ||
       !email.trim() ||
       !password ||
       !confirmPassword
@@ -38,6 +41,11 @@ export default function SignUp({ navigation }) {
         'Error',
         'La contraseña debe tener al menos 6 caracteres, incluyendo una letra mayúscula, una minúscula y un número.'
       );
+      return;
+    }
+
+    if (!auth || !db) {
+      Alert.alert('Error', 'No se pudo conectar con Firebase. Inténtalo más tarde.');
       return;
     }
 
@@ -68,13 +76,44 @@ export default function SignUp({ navigation }) {
       return;
     }
 
+    let nombreAuthenticationGuardado = true;
     try {
       await updateProfile(credential.user, {
         displayName: `${firstName.trim()} ${lastName.trim()}`,
       });
-      Alert.alert('Registro exitoso', 'Usuario registrado con éxito.');
     } catch (error) {
-      Alert.alert('Cuenta creada', 'La cuenta se creó, pero no se pudo guardar el nombre.');
+      console.error('Error al guardar el nombre en Firebase Authentication:', error);
+      nombreAuthenticationGuardado = false;
+    }
+
+    try {
+      const nombreCompleto = `${firstName.trim()} ${lastName.trim()}`;
+      await setDoc(doc(db, 'usuarios', credential.user.uid), {
+        uid: credential.user.uid,
+        nombre: firstName.trim(),
+        apellido: lastName.trim(),
+        nombreCompleto,
+        dni: dni.trim(),
+        telefono: phone.trim(),
+        email: email.trim(),
+        rol: 'usuario',
+        createdAt: serverTimestamp(),
+      });
+      Alert.alert(
+        'Registro exitoso',
+        nombreAuthenticationGuardado
+          ? 'Usuario registrado y guardado en la base de datos.'
+          : 'El usuario se guardó en la base de datos, pero no se pudo actualizar su nombre de perfil.',
+      );
+    } catch (error) {
+      console.error('Error al guardar el usuario en Cloud Firestore:', error);
+      const errorMessage = error.code === 'permission-denied'
+        ? 'Firestore rechazó la escritura. Revisa las reglas de seguridad de la colección usuarios.'
+        : 'No se pudo guardar el perfil en Cloud Firestore. Inténtalo de nuevo más tarde.';
+      Alert.alert(
+        'Cuenta creada, perfil no guardado',
+        `${errorMessage}\n\nCódigo: ${error.code ?? 'desconocido'}`,
+      );
     }
   };
 
@@ -126,6 +165,20 @@ export default function SignUp({ navigation }) {
               value={dni}
               onChangeText={setDni}
               keyboardType="numeric"
+            />
+          </View>
+
+          <Text style={styles.label}>Número de teléfono</Text>
+          <View style={styles.inputBox}>
+            <Feather name="phone" size={18} color="#EE684D" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Ingrese su número de teléfono"
+              placeholderTextColor="#A0A5AA"
+              value={phone}
+              onChangeText={setPhone}
+              keyboardType="phone-pad"
+              maxLength={20}
             />
           </View>
 

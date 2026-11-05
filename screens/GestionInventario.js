@@ -26,6 +26,8 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
+import ProfileEditModal from './ProfileEditModal';
+import ProfileRoleLabel from './ProfileRoleLabel';
 
 const filtros = ['TODAS', 'Nombre', 'Lote'];
 const { width } = Dimensions.get('window');
@@ -57,6 +59,8 @@ export default function GestionInventario({ navigation, route }) {
   const [busqueda, setBusqueda] = useState('');
   const [filtroSeleccionado, setFiltroSeleccionado] = useState('TODAS');
   const [menuVisible, setMenuVisible] = useState(false);
+  const [profileEditorVisible, setProfileEditorVisible] = useState(false);
+  const [profileName, setProfileName] = useState(auth?.currentUser?.displayName || 'Usuario');
   const [filtrosVisibles, setFiltrosVisibles] = useState(false);
   const [estadoFiltro, setEstadoFiltro] = useState('TODOS');
   const [categoriaFiltro, setCategoriaFiltro] = useState('TODAS');
@@ -932,10 +936,18 @@ export default function GestionInventario({ navigation, route }) {
             <View style={styles.profileCard}>
               <View style={styles.profileAvatar} />
               <View style={styles.profileInfo}>
-                <Text style={styles.profileName}>Usuario</Text>
-                <Text style={styles.profileRole}>Administradora</Text>
+                <Text style={styles.profileName} numberOfLines={1}>{profileName}</Text>
+                <ProfileRoleLabel />
               </View>
-              <TouchableOpacity style={styles.editButton}>
+              <TouchableOpacity
+                style={styles.editButton}
+                onPress={() => {
+                  setMenuVisible(false);
+                  setProfileEditorVisible(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Editar perfil"
+              >
                 <Feather name="edit-2" size={18} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
@@ -982,6 +994,12 @@ export default function GestionInventario({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </Modal>
+      <ProfileEditModal
+        visible={profileEditorVisible}
+        initialName={profileName}
+        onClose={() => setProfileEditorVisible(false)}
+        onSaved={setProfileName}
+      />
     </SafeAreaView>
   );
 }
@@ -1583,10 +1601,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: 'bold',
-  },
-  profileRole: {
-    color: '#94A3B8',
-    fontSize: 11,
   },
   editButton: {
     padding: 4,

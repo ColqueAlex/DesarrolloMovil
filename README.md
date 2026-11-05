@@ -38,9 +38,16 @@ Si `npm ci` indica que faltan archivos o que el lockfile no coincide, usar `npm 
 5. Entrar en **Authentication > Método de acceso**.
 6. Agregar y habilitar **Correo electrónico/contraseña**.
 7. En **Firestore Database**, crear una base de datos para el proyecto.
-8. Configurar reglas de Firestore para que los usuarios autenticados puedan leer, registrar, actualizar y eliminar documentos en `productos`. No dejes reglas de acceso público en producción.
+8. Publicar las reglas de Firestore definidas en `firestore.rules`. Estas permiten a los usuarios autenticados trabajar con `productos` y restringen cada perfil de `usuarios` a su propietario. El registro desde la app asigna el rol `usuario`; el cliente no puede otorgarse el rol `administrador`.
 
-La colección `productos` y sus documentos se crean automáticamente al registrar el primer producto desde la aplicación.
+La colección `productos` y sus documentos se crean automáticamente al registrar el primer producto desde la aplicación. Para dar acceso de administrador a una cuenta creada en **Authentication > Agregar usuario**, copia su UID y crea manualmente en Firestore el documento `usuarios/{UID}` con, al menos, estos campos:
+
+```text
+uid: {UID}
+rol: administrador
+```
+
+Solo ese perfil mostrará la etiqueta **Administradora**. Las cuentas registradas desde la app guardan `rol: usuario` y no muestran esa etiqueta.
 
 ## 3. Agregar la configuración Firebase
 
