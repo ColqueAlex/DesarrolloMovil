@@ -7,7 +7,7 @@ import { auth, isFirebaseConfigured } from '../src/config/firebaseConfig';
 import Login from '../screens/Login';
 import SignUp from '../screens/SignUp';
 import ForgotPassword from '../screens/ForgotPassword';
-import RecoveryCode from "../screens/RecoveryCode"
+import RecoveryCode from '../screens/RecoveryCode';
 import NewPassword from '../screens/NewPassword';
 import Home from '../screens/Home';
 import GestionInventario from '../screens/GestionInventario';
@@ -61,19 +61,18 @@ export default function Navigation() {
             <Stack.Screen 
               name="Login" 
               component={Login} 
-              options={{ title: 'Iniciar sesión' }} 
+              options={{ headerShown: false }} 
             />
             <Stack.Screen 
               name="SignUp" 
               component={SignUp} 
-              options={{ title: 'Registro' }} 
+              options={{ headerShown: false }} 
             />
             <Stack.Screen 
               name="ForgotPassword" 
               component={ForgotPassword} 
-              options={{ title: 'Recuperar Contraseña' }} 
+              options={{ headerShown: false }} 
             />
-            {/* AGREGADAS AQUÍ */}
             <Stack.Screen 
               name="RecoveryCode" 
               component={RecoveryCode} 
