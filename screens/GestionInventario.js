@@ -21,6 +21,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   serverTimestamp,
   updateDoc,
@@ -61,6 +62,7 @@ export default function GestionInventario({ navigation, route }) {
   const [menuVisible, setMenuVisible] = useState(false);
   const [profileEditorVisible, setProfileEditorVisible] = useState(false);
   const [profileName, setProfileName] = useState(auth?.currentUser?.displayName || 'Usuario');
+  const [profileImageUri, setProfileImageUri] = useState(auth?.currentUser?.photoURL || '');
   const [filtrosVisibles, setFiltrosVisibles] = useState(false);
   const [estadoFiltro, setEstadoFiltro] = useState('TODOS');
   const [categoriaFiltro, setCategoriaFiltro] = useState('TODAS');
@@ -83,6 +85,29 @@ export default function GestionInventario({ navigation, route }) {
   const fechaVencimientoBloqueada = Boolean(
     productoEditando && fechaYaVencida(productoEditando.fechaVencimiento),
   );
+
+  useEffect(() => {
+    const user = auth?.currentUser;
+    if (!menuVisible || !user || !db) return undefined;
+
+    let cancelled = false;
+    getDoc(doc(db, 'usuarios', user.uid))
+      .then((profileSnapshot) => {
+        if (cancelled) return;
+        const profile = profileSnapshot.exists() ? profileSnapshot.data() : {};
+        setProfileImageUri(profile.fotoPerfil || user.photoURL || '');
+      })
+      .catch((error) => {
+        console.error('Error al cargar la foto del perfil:', error);
+        if (!cancelled) {
+          Alert.alert('No se pudo cargar la foto', 'Intenta abrir el menú nuevamente.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [menuVisible]);
 
   useEffect(() => {
     if (!db) {
@@ -934,7 +959,11 @@ export default function GestionInventario({ navigation, route }) {
 
           <View style={styles.drawerContainer}>
             <View style={styles.profileCard}>
-              <View style={styles.profileAvatar} />
+              <View style={styles.profileAvatar}>
+                {profileImageUri ? (
+                  <Image source={{ uri: profileImageUri }} style={styles.profileAvatarImage} />
+                ) : null}
+              </View>
               <View style={styles.profileInfo}>
                 <Text style={styles.profileName} numberOfLines={1}>{profileName}</Text>
                 <ProfileRoleLabel />
@@ -998,7 +1027,10 @@ export default function GestionInventario({ navigation, route }) {
         visible={profileEditorVisible}
         initialName={profileName}
         onClose={() => setProfileEditorVisible(false)}
-        onSaved={setProfileName}
+        onSaved={(name, imageUri) => {
+          setProfileName(name);
+          setProfileImageUri(imageUri || '');
+        }}
       />
     </SafeAreaView>
   );
@@ -1592,6 +1624,12 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  profileAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 21,
   },
   profileInfo: {
     flex: 1,

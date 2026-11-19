@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,6 +13,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { updateEmail, updateProfile } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
@@ -22,8 +25,10 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [profileRole, setProfileRole] = useState('usuario');
+  const [profileImageUri, setProfileImageUri] = useState('');
   const [saving, setSaving] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [pickingImage, setPickingImage] = useState(false);
 
   useEffect(() => {
     if (!visible) return undefined;
@@ -36,6 +41,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
     setPhone('');
     setEmail(user?.email || '');
     setProfileRole('usuario');
+    setProfileImageUri(user?.photoURL || '');
 
     if (!user || !db) return undefined;
 
@@ -51,6 +57,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
         setPhone(profile.telefono || '');
         setEmail(profile.email || user.email || '');
         setProfileRole(profile.rol === 'administrador' ? 'administrador' : 'usuario');
+        setProfileImageUri(profile.fotoPerfil || user.photoURL || '');
       } catch (error) {
         console.error('Error al cargar el perfil desde Cloud Firestore:', error);
         if (!cancelled) {
@@ -69,6 +76,34 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
       cancelled = true;
     };
   }, [initialName, visible]);
+
+  const chooseProfileImage = async () => {
+    setPickingImage(true);
+    try {
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Permiso necesario', 'Permite el acceso a tus fotos para elegir una imagen de perfil.');
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]?.uri) {
+        setProfileImageUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error al elegir la foto de perfil:', error);
+      Alert.alert('No se pudo elegir la foto', 'Inténtalo de nuevo.');
+    } finally {
+      setPickingImage(false);
+    }
+  };
 
   const saveProfile = async () => {
     const trimmedFirstName = firstName.trim();
@@ -135,9 +170,10 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
         telefono: trimmedPhone,
         email: trimmedEmail,
         rol: profileRole,
+        fotoPerfil: profileImageUri || null,
         updatedAt: serverTimestamp(),
       }, { merge: true });
-      onSaved(`${trimmedFirstName} ${trimmedLastName}`);
+      onSaved(`${trimmedFirstName} ${trimmedLastName}`, profileImageUri);
       onClose();
       Alert.alert(
         'Perfil actualizado',
@@ -174,6 +210,31 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.avatarButton}
+              onPress={chooseProfileImage}
+              disabled={saving || loadingProfile || pickingImage}
+              accessibilityRole="button"
+              accessibilityLabel={profileImageUri ? 'Cambiar foto de perfil' : 'Añadir foto de perfil'}
+            >
+              <View style={styles.avatar}>
+                {profileImageUri ? (
+                  <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
+                ) : (
+                  <Feather name="user" size={40} color="#64748B" />
+                )}
+                <View style={styles.cameraBadge}>
+                  {pickingImage ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Feather name="camera" size={15} color="#FFFFFF" />
+                  )}
+                </View>
+              </View>
+              <Text style={styles.photoLabel}>
+                {pickingImage ? 'Abriendo fotos...' : 'Añadir foto'}
+              </Text>
+            </TouchableOpacity>
             <Text style={styles.title}>Editar perfil</Text>
             <Text style={styles.description}>Actualiza la información de tu cuenta.</Text>
 
@@ -286,6 +347,46 @@ const styles = StyleSheet.create({
     color: '#1B3A57',
     fontSize: 22,
     fontWeight: '700',
+    textAlign: 'center',
+  },
+  avatarButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginBottom: 18,
+  },
+  avatar: {
+    alignItems: 'center',
+    backgroundColor: '#E2E8F0',
+    borderColor: '#CBD5E1',
+    borderRadius: 52,
+    borderWidth: 1,
+    height: 104,
+    justifyContent: 'center',
+    width: 104,
+  },
+  avatarImage: {
+    borderRadius: 52,
+    height: '100%',
+    width: '100%',
+  },
+  cameraBadge: {
+    alignItems: 'center',
+    backgroundColor: '#1B3A57',
+    borderColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 2,
+    bottom: 0,
+    height: 32,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 0,
+    width: 32,
+  },
+  photoLabel: {
+    color: '#1B3A57',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 8,
   },
   description: {
     color: '#64748B',

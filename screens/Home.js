@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,8 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { signOut } from 'firebase/auth';
-import { auth } from '../src/config/firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../src/config/firebaseConfig';
 import ProfileEditModal from './ProfileEditModal';
 import ProfileRoleLabel from './ProfileRoleLabel';
 
@@ -24,6 +25,30 @@ export default function Home({ navigation }) {
   const [menuVisible, setMenuVisible] = useState(false);
   const [profileEditorVisible, setProfileEditorVisible] = useState(false);
   const [profileName, setProfileName] = useState(auth?.currentUser?.displayName || 'Usuario');
+  const [profileImageUri, setProfileImageUri] = useState(auth?.currentUser?.photoURL || '');
+
+  useEffect(() => {
+    const user = auth?.currentUser;
+    if (!menuVisible || !user || !db) return undefined;
+
+    let cancelled = false;
+    getDoc(doc(db, 'usuarios', user.uid))
+      .then((profileSnapshot) => {
+        if (cancelled) return;
+        const profile = profileSnapshot.exists() ? profileSnapshot.data() : {};
+        setProfileImageUri(profile.fotoPerfil || user.photoURL || '');
+      })
+      .catch((error) => {
+        console.error('Error al cargar la foto del perfil:', error);
+        if (!cancelled) {
+          Alert.alert('No se pudo cargar la foto', 'Intenta abrir el menú nuevamente.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [menuVisible]);
 
   const openInventory = () => {
     setMenuVisible(false);
@@ -192,7 +217,11 @@ export default function Home({ navigation }) {
 
           <View style={styles.drawerContainer}>
             <View style={styles.profileCard}>
-              <View style={styles.profileAvatar} />
+              <View style={styles.profileAvatar}>
+                {profileImageUri ? (
+                  <Image source={{ uri: profileImageUri }} style={styles.profileAvatarImage} />
+                ) : null}
+              </View>
               <View style={styles.profileInfo}>
                 <Text style={styles.profileName} numberOfLines={1}>{profileName}</Text>
                 <ProfileRoleLabel />
@@ -256,7 +285,10 @@ export default function Home({ navigation }) {
         visible={profileEditorVisible}
         initialName={profileName}
         onClose={() => setProfileEditorVisible(false)}
-        onSaved={setProfileName}
+        onSaved={(name, imageUri) => {
+          setProfileName(name);
+          setProfileImageUri(imageUri || '');
+        }}
       />
     </SafeAreaView>
   );
@@ -408,6 +440,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  profileAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 21,
   },
   profileInfo: {
     flex: 1,
