@@ -43,7 +43,7 @@ export default function Navigation() {
   return (
     <NavigationContainer>
       <Stack.Navigator>
-        {user ? (
+        {user && user.emailVerified ? (
           <>
             <Stack.Screen
               name="Home"

@@ -13,7 +13,11 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  sendEmailVerification,
+  signInWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth';
 import { auth } from '../src/config/firebaseConfig';
 
 export default function Login({ navigation }) {
@@ -26,6 +30,7 @@ export default function Login({ navigation }) {
   // Estados para errores profesionales en pantalla
   const [fieldErrors, setFieldErrors] = useState({ email: '', password: '' });
   const [generalError, setGeneralError] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
 
   const validateFields = () => {
     let valid = true;
@@ -54,6 +59,7 @@ export default function Login({ navigation }) {
 
   const handleLogin = async () => {
     setGeneralError('');
+    setStatusMessage('');
 
     // 1. Validar campos antes de llamar a Firebase
     if (!validateFields()) {
@@ -62,7 +68,18 @@ export default function Login({ navigation }) {
 
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      if (!credential.user.emailVerified) {
+        try {
+          await sendEmailVerification(credential.user);
+        } finally {
+          await signOut(auth);
+        }
+        setStatusMessage(
+          'Tu correo aun no esta verificado. Te enviamos un nuevo enlace; abrelo para verificar tu cuenta y vuelve a iniciar sesion.'
+        );
+        return;
+      }
       // El observador de Firebase redirige automáticamente a Home
     } catch (error) {
       // Usamos console.log para no disparar el banner rojo de Expo Go
@@ -112,12 +129,14 @@ export default function Login({ navigation }) {
     setEmail(text);
     if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: '' }));
     if (generalError) setGeneralError('');
+    if (statusMessage) setStatusMessage('');
   };
 
   const handlePasswordChange = (text) => {
     setPassword(text);
     if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: '' }));
     if (generalError) setGeneralError('');
+    if (statusMessage) setStatusMessage('');
   };
 
   return (
@@ -147,6 +166,12 @@ export default function Login({ navigation }) {
               <View style={styles.errorBanner}>
                 <Feather name="alert-circle" size={18} color="#DC2626" style={styles.bannerIcon} />
                 <Text style={styles.errorBannerText}>{generalError}</Text>
+              </View>
+            ) : null}
+            {statusMessage ? (
+              <View style={styles.successBanner}>
+                <Feather name="check-circle" size={18} color="#059669" style={styles.bannerIcon} />
+                <Text style={styles.successBannerText}>{statusMessage}</Text>
               </View>
             ) : null}
 
@@ -341,6 +366,24 @@ const styles = StyleSheet.create({
   errorBannerText: {
     flex: 1,
     color: '#991B1B',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  successBannerText: {
+    flex: 1,
+    color: '#065F46',
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '500',

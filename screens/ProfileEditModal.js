@@ -22,6 +22,7 @@ import { auth, db } from '../src/config/firebaseConfig';
 export default function ProfileEditModal({ visible, initialName, onClose, onSaved }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [dni, setDni] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [profileRole, setProfileRole] = useState('usuario');
@@ -38,6 +39,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
     const [fallbackFirstName = '', ...fallbackLastName] = (initialName || '').split(/\s+/);
     setFirstName(fallbackFirstName);
     setLastName(fallbackLastName.join(' '));
+    setDni('');
     setPhone('');
     setEmail(user?.email || '');
     setProfileRole('usuario');
@@ -54,6 +56,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
         const profile = profileSnapshot.data();
         setFirstName(profile.nombre || fallbackFirstName);
         setLastName(profile.apellido || fallbackLastName.join(' '));
+        setDni(profile.dni || '');
         setPhone(profile.telefono || '');
         setEmail(profile.email || user.email || '');
         setProfileRole(profile.rol === 'administrador' ? 'administrador' : 'usuario');
@@ -108,10 +111,15 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
   const saveProfile = async () => {
     const trimmedFirstName = firstName.trim();
     const trimmedLastName = lastName.trim();
+    const trimmedDni = dni.trim();
     const trimmedPhone = phone.trim();
     const trimmedEmail = email.trim();
     if (!trimmedFirstName || !trimmedLastName || !trimmedEmail) {
       Alert.alert('Datos requeridos', 'Ingresa nombre, apellido y correo electrónico.');
+      return;
+    }
+    if (trimmedDni && !/^\d{7,8}$/.test(trimmedDni)) {
+      Alert.alert('DNI inválido', 'El DNI debe contener entre 7 y 8 dígitos numéricos.');
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
@@ -166,6 +174,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
         uid: user.uid,
         nombre: trimmedFirstName,
         apellido: trimmedLastName,
+        dni: trimmedDni,
         nombreCompleto: `${trimmedFirstName} ${trimmedLastName}`,
         telefono: trimmedPhone,
         email: trimmedEmail,
@@ -267,6 +276,19 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
               placeholderTextColor="#94A3B8"
               autoCapitalize="words"
               maxLength={60}
+              editable={!saving && !loadingProfile}
+              returnKeyType="done"
+            />
+
+            <Text style={styles.label}>DNI</Text>
+            <TextInput
+              style={styles.input}
+              value={dni}
+              onChangeText={(value) => setDni(value.replace(/[^0-9]/g, ''))}
+              placeholder="Tu número de DNI"
+              placeholderTextColor="#94A3B8"
+              keyboardType="numeric"
+              maxLength={8}
               editable={!saving && !loadingProfile}
               returnKeyType="done"
             />

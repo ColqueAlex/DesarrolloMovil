@@ -13,8 +13,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { auth } from '../src/config/firebaseConfig';
+import {
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+  signOut,
+  updateProfile,
+} from 'firebase/auth';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db } from '../src/config/firebaseConfig';
 
 export default function SignUp({ navigation }) {
   const [firstName, setFirstName] = useState('');
@@ -38,12 +44,14 @@ export default function SignUp({ navigation }) {
     confirmPassword: '',
   });
   const [generalError, setGeneralError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
   const clearFieldError = (field) => {
     if (fieldErrors[field]) {
       setFieldErrors((prev) => ({ ...prev, [field]: '' }));
     }
     if (generalError) setGeneralError('');
+    if (successMessage) setSuccessMessage('');
   };
 
   const validateFields = () => {
@@ -116,6 +124,7 @@ export default function SignUp({ navigation }) {
 
   const handleSignUp = async () => {
     setGeneralError('');
+    setSuccessMessage('');
 
     if (!validateFields()) {
       return;
@@ -129,9 +138,30 @@ export default function SignUp({ navigation }) {
         password
       );
 
-      await updateProfile(credential.user, {
-        displayName: `${firstName.trim()} ${lastName.trim()}`,
-      });
+      try {
+        await updateProfile(credential.user, {
+          displayName: `${firstName.trim()} ${lastName.trim()}`,
+        });
+        await setDoc(doc(db, 'usuarios', credential.user.uid), {
+          uid: credential.user.uid,
+          nombre: firstName.trim(),
+          apellido: lastName.trim(),
+          dni: dni.trim(),
+          nombreCompleto: `${firstName.trim()} ${lastName.trim()}`,
+          telefono: '',
+          email: email.trim(),
+          rol: 'usuario',
+          fotoPerfil: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        await sendEmailVerification(credential.user);
+      } finally {
+        await signOut(auth);
+      }
+      setSuccessMessage(
+        `Enviamos un correo de verificacion a ${email.trim()}. Abre el enlace para verificar tu cuenta y luego inicia sesion. Revisa tambien spam.`
+      );
     } catch (error) {
       console.log('Aviso de registro:', error.code);
 
@@ -156,12 +186,27 @@ export default function SignUp({ navigation }) {
           break;
         case 'auth/network-request-failed':
           setGeneralError(
-            'Sin conexión a internet. Verifica tu red e intenta nuevamente.'
+            'Sin conexion a internet. Si la cuenta ya se creo, inicia sesion cuando recuperes la conexion para solicitar el correo de verificacion.'
+          );
+          break;
+        case 'auth/too-many-requests':
+          setGeneralError(
+            'Firebase limito la solicitud. Si la cuenta ya se creo, intenta iniciar sesion mas tarde para solicitar otro enlace.'
+          );
+          break;
+        case 'auth/operation-not-allowed':
+          setGeneralError(
+            'Firebase no permite el registro con correo y contrasena. Habilita Correo electronico/Contrasena en Authentication > Metodo de acceso.'
+          );
+          break;
+        case 'permission-denied':
+          setGeneralError(
+            'No se pudieron guardar los datos del perfil. Publica las reglas actualizadas de Firestore; luego inicia sesion y completa el perfil.'
           );
           break;
         default:
           setGeneralError(
-            'No se pudo completar el registro en este momento. Intenta nuevamente.'
+            'No se pudo completar el registro o enviar el correo de verificacion. Si la cuenta ya se creo, inicia sesion para solicitar otro enlace.'
           );
           break;
       }
@@ -195,13 +240,21 @@ export default function SignUp({ navigation }) {
         {/* Cuerpo principal */}
         <View style={styles.bodyContainer}>
           <Text style={styles.mainTitle}>Crear cuenta</Text>
-          <Text style={styles.subtitle}>Completa tus datos para registrarte</Text>
+          <Text style={styles.subtitle}>
+            Completa tus datos y usa Gmail, Outlook u otro correo electronico.
+          </Text>
 
           {/* Banner de error general */}
           {generalError ? (
             <View style={styles.errorBanner}>
               <Feather name="alert-circle" size={18} color="#DC2626" style={styles.bannerIcon} />
               <Text style={styles.errorBannerText}>{generalError}</Text>
+            </View>
+          ) : null}
+          {successMessage ? (
+            <View style={styles.successBanner}>
+              <Feather name="check-circle" size={18} color="#059669" style={styles.bannerIcon} />
+              <Text style={styles.successBannerText}>{successMessage}</Text>
             </View>
           ) : null}
 
@@ -583,6 +636,24 @@ const styles = StyleSheet.create({
   errorBannerText: {
     flex: 1,
     color: '#991B1B',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+  },
+  successBannerText: {
+    flex: 1,
+    color: '#065F46',
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '500',

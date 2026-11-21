@@ -37,8 +37,9 @@ Si `npm ci` indica que faltan archivos o que el lockfile no coincide, usar `npm 
 4. Registrar la aplicación y conservar el objeto `firebaseConfig`.
 5. Entrar en **Authentication > Método de acceso**.
 6. Agregar y habilitar **Correo electrónico/contraseña**.
-7. En **Firestore Database**, crear una base de datos para el proyecto.
-8. Publicar las reglas de Firestore definidas en `firestore.rules`. Estas permiten a los usuarios autenticados trabajar con `productos` y restringen cada perfil de `usuarios` a su propietario. El registro desde la app asigna el rol `usuario`; el cliente no puede otorgarse el rol `administrador`.
+7. En **Authentication > Plantillas**, revisar la plantilla **Verificar dirección de correo electrónico** para personalizar el correo y su enlace de verificación.
+8. En **Firestore Database**, crear una base de datos para el proyecto.
+9. Publicar las reglas de Firestore definidas en `firestore.rules`. Estas permiten crear únicamente el perfil propio durante el registro; la lectura y las demás operaciones requieren un correo verificado. Los perfiles quedan restringidos a su propietario. El registro desde la app asigna el rol `usuario`; el cliente no puede otorgarse el rol `administrador`.
 
 La colección `productos` y sus documentos se crean automáticamente al registrar el primer producto desde la aplicación. Para dar acceso de administrador a una cuenta creada en **Authentication > Agregar usuario**, copia su UID y crea manualmente en Firestore el documento `usuarios/{UID}` con, al menos, estos campos:
 
@@ -94,12 +95,14 @@ Para detener el servidor, presionar `Ctrl+C`.
 
 ## 5. Prueba funcional
 
-1. Registrar un usuario con nombre, apellido, correo y contraseña.
+1. Registrar un usuario con nombre, apellido, correo y contraseña. La app enviará un correo con un enlace para verificar la cuenta; no se podrá iniciar sesión hasta abrir ese enlace. Si se intenta iniciar sesión sin verificar, se enviará otro enlace.
 2. La contraseña debe tener al menos seis caracteres, una mayúscula, una minúscula y un número; por ejemplo, `Prueba123`.
-3. Confirmar que aparece **Inicio**.
-4. Comprobar el usuario en **Firebase > Authentication > Usuarios**.
-5. Cerrar sesión e iniciar sesión con la misma cuenta.
-6. Cerrar y volver a abrir Expo Go para comprobar que la sesión se conserva.
+3. Revisar la bandeja de entrada y spam, y pulsar el enlace **Verificar correo electrónico**.
+4. Iniciar sesión y confirmar que aparece **Inicio**.
+5. Abrir **Editar perfil** y comprobar que aparezcan nombre, apellido, DNI y correo.
+6. Comprobar que el usuario figura como verificado en **Firebase > Authentication > Usuarios**.
+7. Cerrar sesión e iniciar sesión con la misma cuenta.
+8. Cerrar y volver a abrir Expo Go para comprobar que la sesión se conserva.
 
 ## Soluciones rápidas
 

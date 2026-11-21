@@ -1,17 +1,21 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isVerifiedUser() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
     match /productos/{productoId} {
-      allow read, create, update, delete: if request.auth != null;
+      allow read, create, update, delete: if isVerifiedUser();
     }
 
     match /usuarios/{userId} {
-      allow read: if request.auth != null && request.auth.uid == userId;
+      allow read: if isVerifiedUser() && request.auth.uid == userId;
       allow create: if request.auth != null
         && request.auth.uid == userId
         && request.resource.data.uid == userId
         && request.resource.data.rol == 'usuario';
-      allow update: if request.auth != null
+      allow update: if isVerifiedUser()
         && request.auth.uid == userId
         && request.resource.data.uid == userId
         && request.resource.data.get('rol', 'usuario')
