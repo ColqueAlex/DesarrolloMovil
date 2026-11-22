@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -11,15 +11,22 @@ import RecoveryCode from '../screens/RecoveryCode';
 import NewPassword from '../screens/NewPassword';
 import Home from '../screens/Home';
 import GestionInventario from '../screens/GestionInventario';
+import AnimatedSplash from '../components/AnimatedSplash';
 
 const Stack = createStackNavigator();
 
 export default function Navigation() {
   const [user, setUser] = useState(undefined);
+  const [splashReady, setSplashReady] = useState(false);
 
   useEffect(() => {
     if (!auth) return;
     return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSplashReady(true), 1400);
+    return () => clearTimeout(timer);
   }, []);
 
   if (!isFirebaseConfigured) {
@@ -32,12 +39,8 @@ export default function Navigation() {
     );
   }
 
-  if (user === undefined) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
+  if (user === undefined || !splashReady) {
+    return <AnimatedSplash />;
   }
 
   return (
