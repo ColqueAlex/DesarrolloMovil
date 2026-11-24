@@ -51,7 +51,7 @@ export default function Navigation() {
             <Stack.Screen
               name="Home"
               component={Home}
-              options={{ title: 'Inicio' }}
+              options={{ headerShown: false }}
             />
             <Stack.Screen
               name="Inventory"
