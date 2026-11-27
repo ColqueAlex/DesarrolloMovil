@@ -15,16 +15,22 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { updateEmail, updateProfile } from 'firebase/auth';
+import { verifyBeforeUpdateEmail } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
 
+// Se pueden cambiar la foto de perfil, el teléfono y el correo. Nombre,
+// apellido y DNI se muestran pero no se pueden editar.
 export default function ProfileEditModal({ visible, initialName, onClose, onSaved }) {
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [dni, setDni] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [readOnlyData, setReadOnlyData] = useState({ nombre: '', apellido: '', dni: '' });
   const [phone, setPhone] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  // Evita borrar el teléfono guardado si el perfil no se pudo cargar.
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
   const [profileRole, setProfileRole] = useState('usuario');
   const [profileImageUri, setProfileImageUri] = useState('');
   const [saving, setSaving] = useState(false);
@@ -36,12 +42,21 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
 
     let cancelled = false;
     const user = auth?.currentUser;
-    const [fallbackFirstName = '', ...fallbackLastName] = (initialName || '').split(/\s+/);
-    setFirstName(fallbackFirstName);
-    setLastName(fallbackLastName.join(' '));
-    setDni('');
+    const startName = initialName || user?.displayName || '';
+    const [fallbackFirstName = '', ...fallbackLastName] = startName.split(/\s+/);
+    setFullName(startName);
+    setReadOnlyData({
+      nombre: fallbackFirstName,
+      apellido: fallbackLastName.join(' '),
+      dni: '',
+    });
     setPhone('');
+    setPhoneError('');
+    setPhoneTouched(false);
+    setProfileLoaded(false);
+    // El correo vigente es siempre el de Firebase Authentication.
     setEmail(user?.email || '');
+    setEmailError('');
     setProfileRole('usuario');
     setProfileImageUri(user?.photoURL || '');
 
@@ -51,14 +66,20 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
       setLoadingProfile(true);
       try {
         const profileSnapshot = await getDoc(doc(db, 'usuarios', user.uid));
-        if (cancelled || !profileSnapshot.exists()) return;
+        if (cancelled) return;
+        setProfileLoaded(true);
+        if (!profileSnapshot.exists()) return;
 
         const profile = profileSnapshot.data();
-        setFirstName(profile.nombre || fallbackFirstName);
-        setLastName(profile.apellido || fallbackLastName.join(' '));
-        setDni(profile.dni || '');
+        const savedName = profile.nombreCompleto
+          || [profile.nombre, profile.apellido].filter(Boolean).join(' ');
+        if (savedName) setFullName(savedName);
+        setReadOnlyData({
+          nombre: profile.nombre || fallbackFirstName,
+          apellido: profile.apellido || fallbackLastName.join(' '),
+          dni: profile.dni || '',
+        });
         setPhone(profile.telefono || '');
-        setEmail(profile.email || user.email || '');
         setProfileRole(profile.rol === 'administrador' ? 'administrador' : 'usuario');
         setProfileImageUri(profile.fotoPerfil || user.photoURL || '');
       } catch (error) {
@@ -109,23 +130,22 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
   };
 
   const saveProfile = async () => {
-    const trimmedFirstName = firstName.trim();
-    const trimmedLastName = lastName.trim();
-    const trimmedDni = dni.trim();
-    const trimmedPhone = phone.trim();
-    const trimmedEmail = email.trim();
-    if (!trimmedFirstName || !trimmedLastName || !trimmedEmail) {
-      Alert.alert('Datos requeridos', 'Ingresa nombre, apellido y correo electrónico.');
-      return;
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPhone = phone.trim().replace(/\s+/g, ' ');
+    let hasErrors = false;
+
+    if (trimmedPhone && !/^\+?[\d\s-]{6,20}$/.test(trimmedPhone)) {
+      setPhoneError('Solo números, espacios, guiones y + al inicio (mínimo 6 dígitos).');
+      hasErrors = true;
     }
-    if (trimmedDni && !/^\d{7,8}$/.test(trimmedDni)) {
-      Alert.alert('DNI inválido', 'El DNI debe contener entre 7 y 8 dígitos numéricos.');
-      return;
+    if (!trimmedEmail) {
+      setEmailError('Ingresa tu correo electrónico.');
+      hasErrors = true;
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setEmailError('Ingresa un correo electrónico válido.');
+      hasErrors = true;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      Alert.alert('Correo inválido', 'Ingresa un correo electrónico válido.');
-      return;
-    }
+    if (hasErrors) return;
 
     const user = auth?.currentUser;
     if (!user) {
@@ -138,65 +158,55 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
     }
 
     setSaving(true);
-    let emailUpdated = false;
-    try {
-      if (trimmedEmail !== user.email) {
-        await updateEmail(user, trimmedEmail);
-        emailUpdated = true;
+
+    // 1) Correo: Firebase envía un enlace al correo nuevo y el cambio se
+    //    aplica recién cuando la persona lo confirma.
+    const emailChanged = trimmedEmail !== String(user.email || '').toLowerCase();
+    if (emailChanged) {
+      try {
+        await verifyBeforeUpdateEmail(user, trimmedEmail);
+      } catch (error) {
+        console.error('Error al solicitar el cambio de correo:', error);
+        let errorMessage = 'No se pudo cambiar el correo electrónico. Inténtalo de nuevo.';
+        if (error.code === 'auth/requires-recent-login') {
+          errorMessage = 'Por seguridad, cierra sesión e inicia sesión nuevamente antes de cambiar el correo.';
+        } else if (error.code === 'auth/email-already-in-use') {
+          errorMessage = 'Ese correo electrónico ya está asociado a otra cuenta.';
+        } else if (error.code === 'auth/invalid-email' || error.code === 'auth/invalid-new-email') {
+          errorMessage = 'El formato del correo electrónico no es válido.';
+        } else if (error.code === 'auth/too-many-requests') {
+          errorMessage = 'Hiciste demasiados intentos. Espera unos minutos e inténtalo otra vez.';
+        }
+        setEmailError(errorMessage);
+        setSaving(false);
+        return;
       }
-    } catch (error) {
-      console.error('Error al actualizar el correo en Firebase Authentication:', error);
-      let errorMessage = 'No se pudo actualizar el correo electrónico.';
-      if (error.code === 'auth/requires-recent-login') {
-        errorMessage = 'Por seguridad, cierra sesión e inicia sesión nuevamente antes de cambiar el correo.';
-      } else if (error.code === 'auth/email-already-in-use') {
-        errorMessage = 'Ese correo electrónico ya está asociado a otra cuenta.';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = 'El formato del correo electrónico no es válido.';
-      }
-      Alert.alert('No se pudo actualizar el correo', errorMessage);
-      setSaving(false);
-      return;
     }
 
-    let authNameUpdated = true;
-    try {
-      await updateProfile(user, {
-        displayName: `${trimmedFirstName} ${trimmedLastName}`,
-      });
-    } catch (error) {
-      authNameUpdated = false;
-      console.error('Error al actualizar el nombre en Firebase Authentication:', error);
-    }
-
+    // 2) Foto y teléfono (más el correo vigente). Nombre, apellido, DNI y rol
+    //    no se tocan.
     try {
       await setDoc(doc(db, 'usuarios', user.uid), {
         uid: user.uid,
-        nombre: trimmedFirstName,
-        apellido: trimmedLastName,
-        dni: trimmedDni,
-        nombreCompleto: `${trimmedFirstName} ${trimmedLastName}`,
-        telefono: trimmedPhone,
-        email: trimmedEmail,
         rol: profileRole,
+        email: user.email,
+        ...(profileLoaded || phoneTouched ? { telefono: trimmedPhone } : {}),
         fotoPerfil: profileImageUri || null,
         updatedAt: serverTimestamp(),
       }, { merge: true });
-      onSaved(`${trimmedFirstName} ${trimmedLastName}`, profileImageUri);
+      onSaved(fullName || initialName, profileImageUri);
       onClose();
       Alert.alert(
         'Perfil actualizado',
-        authNameUpdated
-          ? 'Tus datos se guardaron correctamente.'
-          : 'Los datos se guardaron en Firestore, pero no se pudo actualizar el nombre de la cuenta.',
+        emailChanged
+          ? `Te enviamos un enlace a ${trimmedEmail}. Tu correo cambiará cuando lo confirmes desde ese mensaje; mientras tanto sigues entrando con el actual.`
+          : 'Tus cambios se guardaron correctamente.',
       );
     } catch (error) {
       console.error('Error al actualizar el perfil en Cloud Firestore:', error);
       Alert.alert(
-        emailUpdated
-          ? 'Correo actualizado, perfil no guardado'
-          : 'Perfil no guardado',
-        `No se pudieron guardar los datos en Cloud Firestore. Revisa las reglas de seguridad de usuarios e inténtalo de nuevo.\n\nCódigo: ${error.code ?? 'desconocido'}`,
+        'Cambios no guardados',
+        `${emailChanged ? 'El enlace para cambiar el correo sí se envió, pero ' : ''}no se pudieron guardar la foto ni el teléfono. Inténtalo de nuevo.\n\nCódigo: ${error.code ?? 'desconocido'}`,
       );
     } finally {
       setSaving(false);
@@ -241,11 +251,11 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
                 </View>
               </View>
               <Text style={styles.photoLabel}>
-                {pickingImage ? 'Abriendo fotos...' : 'Añadir foto'}
+                {pickingImage ? 'Abriendo fotos...' : profileImageUri ? 'Cambiar foto' : 'Añadir foto'}
               </Text>
             </TouchableOpacity>
             <Text style={styles.title}>Editar perfil</Text>
-            <Text style={styles.description}>Actualiza la información de tu cuenta.</Text>
+            <Text style={styles.description}>Puedes cambiar tu foto, tu teléfono y tu correo electrónico.</Text>
 
             {loadingProfile ? (
               <View style={styles.loading}>
@@ -254,50 +264,35 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
               </View>
             ) : null}
 
-            <Text style={styles.label}>Nombre</Text>
-            <TextInput
-              style={styles.input}
-              value={firstName}
-              onChangeText={setFirstName}
-              placeholder="Tu nombre"
-              placeholderTextColor="#94A3B8"
-              autoCapitalize="words"
-              maxLength={60}
-              editable={!saving && !loadingProfile}
-              returnKeyType="done"
-            />
-
-            <Text style={styles.label}>Apellido</Text>
-            <TextInput
-              style={styles.input}
-              value={lastName}
-              onChangeText={setLastName}
-              placeholder="Tu apellido"
-              placeholderTextColor="#94A3B8"
-              autoCapitalize="words"
-              maxLength={60}
-              editable={!saving && !loadingProfile}
-              returnKeyType="done"
-            />
-
-            <Text style={styles.label}>DNI</Text>
-            <TextInput
-              style={styles.input}
-              value={dni}
-              onChangeText={(value) => setDni(value.replace(/[^0-9]/g, ''))}
-              placeholder="Tu número de DNI"
-              placeholderTextColor="#94A3B8"
-              keyboardType="numeric"
-              maxLength={8}
-              editable={!saving && !loadingProfile}
-              returnKeyType="done"
-            />
+            {[
+              ['Nombre', readOnlyData.nombre],
+              ['Apellido', readOnlyData.apellido],
+              ['DNI', readOnlyData.dni],
+            ].map(([label, value]) => (
+              <View key={label}>
+                <Text style={styles.label}>{label}</Text>
+                <View
+                  style={[styles.input, styles.readOnlyInput]}
+                  accessible
+                  accessibilityLabel={`${label}: ${value || 'sin dato'}. No editable`}
+                >
+                  <Text style={[styles.readOnlyText, !value && styles.readOnlyEmpty]} numberOfLines={1}>
+                    {value || 'Sin dato'}
+                  </Text>
+                  <Feather name="lock" size={15} color="#94A3B8" />
+                </View>
+              </View>
+            ))}
 
             <Text style={styles.label}>Número de teléfono</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, phoneError ? styles.inputError : null]}
               value={phone}
-              onChangeText={setPhone}
+              onChangeText={(value) => {
+                setPhone(value);
+                setPhoneTouched(true);
+                if (phoneError) setPhoneError('');
+              }}
               placeholder="Tu número de teléfono"
               placeholderTextColor="#94A3B8"
               keyboardType="phone-pad"
@@ -305,12 +300,16 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
               editable={!saving && !loadingProfile}
               returnKeyType="done"
             />
+            {phoneError ? <Text style={[styles.errorText, styles.fieldGap]}>{phoneError}</Text> : null}
 
             <Text style={styles.label}>Correo electrónico</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, emailError ? styles.inputError : null]}
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(value) => {
+                setEmail(value);
+                if (emailError) setEmailError('');
+              }}
               placeholder="ejemplo@correo.com"
               placeholderTextColor="#94A3B8"
               keyboardType="email-address"
@@ -320,6 +319,13 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
               editable={!saving && !loadingProfile}
               returnKeyType="done"
             />
+            {emailError ? (
+              <Text style={styles.errorText}>{emailError}</Text>
+            ) : (
+              <Text style={styles.helpText}>
+                Si lo cambias, te enviaremos un enlace al correo nuevo para confirmarlo.
+              </Text>
+            )}
 
             <View style={styles.actions}>
               <TouchableOpacity
@@ -410,11 +416,45 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 8,
   },
+  readOnlyInput: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  readOnlyText: {
+    color: '#475569',
+    fontSize: 16,
+    flex: 1,
+    marginRight: 8,
+  },
+  readOnlyEmpty: {
+    color: '#94A3B8',
+    fontStyle: 'italic',
+  },
   description: {
     color: '#64748B',
     fontSize: 14,
+    textAlign: 'center',
     marginTop: 6,
     marginBottom: 22,
+  },
+  inputError: {
+    borderColor: '#C2410C',
+  },
+  errorText: {
+    color: '#C2410C',
+    fontSize: 13,
+    marginTop: -10,
+  },
+  fieldGap: {
+    marginBottom: 14,
+  },
+  helpText: {
+    color: '#64748B',
+    fontSize: 12,
+    marginTop: -10,
   },
   loading: {
     alignItems: 'center',

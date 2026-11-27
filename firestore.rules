@@ -7,6 +7,49 @@ service cloud.firestore {
 
     match /productos/{productoId} {
       allow read, create, update, delete: if isVerifiedUser();
+
+      // Lotes de cada producto (se crean desde "Registrar compra").
+      match /lotes/{loteId} {
+        allow read, create, update: if isVerifiedUser();
+      }
+    }
+
+    // Las compras no se editan ni se borran: quedan como registro.
+    match /compras/{compraId} {
+      allow read, create: if isVerifiedUser();
+    }
+
+    // Cuentas de clientes. El nombre no se puede cambiar (está reservado en
+    // nombresClientes) y el saldo nunca puede quedar negativo.
+    match /clientes/{clienteId} {
+      allow read: if isVerifiedUser();
+      allow create: if isVerifiedUser()
+        && request.resource.data.nombre is string
+        && request.resource.data.saldo is number
+        && request.resource.data.saldo >= 0
+        && existsAfter(/databases/$(database)/documents/nombresClientes/$(request.resource.data.nombreClave));
+      allow update: if isVerifiedUser()
+        && request.resource.data.nombre == resource.data.nombre
+        && request.resource.data.nombreClave == resource.data.nombreClave
+        && request.resource.data.saldo is number
+        && request.resource.data.saldo >= 0;
+
+      // Historial de pagos y cargos: no se edita ni se borra.
+      match /movimientos/{movimientoId} {
+        allow read, create: if isVerifiedUser();
+      }
+    }
+
+    // Un documento por nombre de cliente. Como solo se permite crear (nunca
+    // sobrescribir), dos clientes no pueden quedar con el mismo nombre.
+    match /nombresClientes/{nombreClave} {
+      allow read: if isVerifiedUser();
+      allow create: if isVerifiedUser() && request.resource.data.clienteId is string;
+    }
+
+    // Necesaria para leer los lotes de todos los productos con collectionGroup('lotes').
+    match /{path=**}/lotes/{loteId} {
+      allow read: if isVerifiedUser();
     }
 
     match /usuarios/{userId} {

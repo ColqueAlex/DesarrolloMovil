@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  FlatList,
   Alert,
   Dimensions,
+  FlatList,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,12 +15,13 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { signOut } from 'firebase/auth';
 import {
   addDoc,
   collection,
-  deleteDoc,
+  collectionGroup,
   doc,
   getDoc,
   onSnapshot,
@@ -30,10 +32,41 @@ import { auth, db } from '../src/config/firebaseConfig';
 import ProfileEditModal from './ProfileEditModal';
 import ProfileRoleLabel from './ProfileRoleLabel';
 
-const filtros = ['TODAS', 'Nombre', 'Lote'];
+/*
+ * Catálogo de productos.
+ *
+ * productos/{productoId}
+ *   nombre, categoria, marca (opcional), precio (precio de venta),
+ *   estado ('ACTIVO' | 'INACTIVO'), creadoEn, actualizadoEn
+ *
+ * productos/{productoId}/lotes/{loteId}   ← se crean desde "Registrar compra"
+ *   numero (string), cantidad (number), fechaVencimiento ('AAAA-MM-DD' o ''),
+ *   creadoEn (timestamp)
+ *
+ * Los productos antiguos guardaban lote, stock y fechaVencimiento dentro del
+ * propio producto: esos datos se muestran como un lote más ("Registro anterior").
+ */
+
 const { width } = Dimensions.get('window');
-const contieneLetras = (valor) => /\p{L}/u.test(valor);
-const categoriaValida = (valor) => /^[\p{L}\p{M}\s]+$/u.test(valor);
+
+const COLORS = {
+  background: '#FAF6F0',
+  text: '#1E293B',
+  muted: '#64748B',
+  border: '#EEF1EF',
+  coral: '#EE684D',
+  coralSoft: '#FDECE8',
+  green: '#3E9B78',
+  greenSoft: '#E4F3EC',
+  navy: '#254C7B',
+  navySoft: '#E6EDF5',
+  amber: '#B7791F',
+  amberSoft: '#FDF3E1',
+  red: '#C2410C',
+  redSoft: '#FDE8E3',
+};
+
+const DIAS_POR_VENCER = 30;
 
 const drawerItems = [
   { id: '1', title: 'Producto', icon: 'cube-outline' },
@@ -44,47 +77,107 @@ const drawerItems = [
   { id: '6', title: 'Caja', icon: 'cash-register' },
 ];
 
-const obtenerFechaLocal = () => {
-  const hoy = new Date();
-  return [
-    hoy.getFullYear(),
-    String(hoy.getMonth() + 1).padStart(2, '0'),
-    String(hoy.getDate()).padStart(2, '0'),
-  ].join('-');
+const FORMULARIO_VACIO = {
+  nombre: '',
+  categoria: '',
+  marca: '',
+  precio: '',
+  estado: 'ACTIVO',
 };
 
-const fechaYaVencida = (fecha) => Boolean(fecha && fecha <= obtenerFechaLocal());
+const contieneLetras = (valor) => /\p{L}/u.test(valor);
+const categoriaValida = (valor) => /^[\p{L}\p{M}\s]+$/u.test(valor);
+const normalizar = (valor) => String(valor ?? '').trim().toLocaleLowerCase();
 
-export default function GestionInventario({ navigation, route }) {
-  const [productos, setProductos] = useState(route?.params?.productos ?? []);
+const formatearPrecio = (valor) => {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? `$${numero.toFixed(2)}` : '—';
+};
+
+const fechaLocalHoy = () => {
+  const hoy = new Date();
+  return new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+};
+
+const parsearFecha = (texto) => {
+  const partes = String(texto ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!partes) return null;
+  return new Date(Number(partes[1]), Number(partes[2]) - 1, Number(partes[3]));
+};
+
+const formatearFecha = (valor) => {
+  let fecha = null;
+  if (typeof valor === 'string') fecha = parsearFecha(valor);
+  else if (valor?.toDate) fecha = valor.toDate();
+  if (!fecha) return null;
+  return [
+    String(fecha.getDate()).padStart(2, '0'),
+    String(fecha.getMonth() + 1).padStart(2, '0'),
+    fecha.getFullYear(),
+  ].join('/');
+};
+
+// Vencido si la fecha es hoy o anterior (mismo criterio que la versión previa).
+const estadoDelLote = (lote) => {
+  const fecha = parsearFecha(lote.fechaVencimiento);
+  if (!fecha) return 'SIN_FECHA';
+  const dias = Math.round((fecha - fechaLocalHoy()) / 86400000);
+  if (dias <= 0) return 'VENCIDO';
+  if (dias <= DIAS_POR_VENCER) return 'POR_VENCER';
+  return 'VIGENTE';
+};
+
+const ESTILO_LOTE = {
+  VENCIDO: { texto: 'Vencido', color: COLORS.red, fondo: COLORS.redSoft },
+  POR_VENCER: { texto: 'Por vencer', color: COLORS.amber, fondo: COLORS.amberSoft },
+  VIGENTE: { texto: 'Vigente', color: COLORS.green, fondo: COLORS.greenSoft },
+  SIN_FECHA: { texto: 'Sin vencimiento', color: COLORS.muted, fondo: '#F1F5F9' },
+};
+
+const ordenarLotes = (lotes) => [...lotes].sort((a, b) => {
+  const fechaA = a.fechaVencimiento || '9999-99-99';
+  const fechaB = b.fechaVencimiento || '9999-99-99';
+  return fechaA.localeCompare(fechaB);
+});
+
+const resumirLotes = (lotes) => {
+  let stock = 0;
+  let porVencer = 0;
+  let vencidos = 0;
+  lotes.forEach((lote) => {
+    const estado = estadoDelLote(lote);
+    if (estado === 'VENCIDO') {
+      vencidos += 1;
+      return;
+    }
+    if (estado === 'POR_VENCER') porVencer += 1;
+    stock += Number(lote.cantidad) || 0;
+  });
+  return { stock, porVencer, vencidos, cantidad: lotes.length };
+};
+
+export default function GestionInventario({ navigation }) {
+  const [productos, setProductos] = useState([]);
+  const [lotesPorProducto, setLotesPorProducto] = useState({});
+  const [cargando, setCargando] = useState(true);
+  const [errorInventario, setErrorInventario] = useState('');
+  const [errorLotes, setErrorLotes] = useState('');
+
   const [busqueda, setBusqueda] = useState('');
-  const [filtroSeleccionado, setFiltroSeleccionado] = useState('TODAS');
+  const [estadoFiltro, setEstadoFiltro] = useState('TODOS');
+  const [categoriaFiltro, setCategoriaFiltro] = useState('TODAS');
+
+  const [productoDetalleId, setProductoDetalleId] = useState(null);
+  const [formularioVisible, setFormularioVisible] = useState(false);
+  const [productoEditando, setProductoEditando] = useState(null);
+  const [formulario, setFormulario] = useState(FORMULARIO_VACIO);
+  const [erroresFormulario, setErroresFormulario] = useState({});
+  const [guardando, setGuardando] = useState(false);
+
   const [menuVisible, setMenuVisible] = useState(false);
   const [profileEditorVisible, setProfileEditorVisible] = useState(false);
   const [profileName, setProfileName] = useState(auth?.currentUser?.displayName || 'Usuario');
   const [profileImageUri, setProfileImageUri] = useState(auth?.currentUser?.photoURL || '');
-  const [filtrosVisibles, setFiltrosVisibles] = useState(false);
-  const [estadoFiltro, setEstadoFiltro] = useState('TODOS');
-  const [categoriaFiltro, setCategoriaFiltro] = useState('TODAS');
-  const [formularioVisible, setFormularioVisible] = useState(false);
-  const [productoEditando, setProductoEditando] = useState(null);
-  const [productoPorEliminar, setProductoPorEliminar] = useState(null);
-  const [eliminando, setEliminando] = useState(false);
-  const [guardando, setGuardando] = useState(false);
-  const [errorInventario, setErrorInventario] = useState('');
-  const [formulario, setFormulario] = useState({
-    nombre: '',
-    lote: '',
-    stock: '',
-    precio: '',
-    estado: 'ACTIVO',
-    fechaVencimiento: '',
-    categoria: '',
-    marca: '',
-  });
-  const fechaVencimientoBloqueada = Boolean(
-    productoEditando && fechaYaVencida(productoEditando.fechaVencimiento),
-  );
 
   useEffect(() => {
     const user = auth?.currentUser;
@@ -109,9 +202,11 @@ export default function GestionInventario({ navigation, route }) {
     };
   }, [menuVisible]);
 
+  // Catálogo en tiempo real.
   useEffect(() => {
     if (!db) {
-      setErrorInventario('No se pudo conectar con la base de datos de inventario.');
+      setErrorInventario('No se pudo conectar con la base de datos.');
+      setCargando(false);
       return undefined;
     }
 
@@ -123,16 +218,114 @@ export default function GestionInventario({ navigation, route }) {
           ...documento.data(),
         })));
         setErrorInventario('');
+        setCargando(false);
       },
       (error) => {
         console.error('Error al cargar productos:', error);
-        setErrorInventario('No se pudieron cargar los productos. Verifica la conexión y las reglas de Firestore.');
+        setErrorInventario('No se pudieron cargar los productos. Verifica tu conexión.');
+        setCargando(false);
       },
     );
   }, []);
 
+  // Todos los lotes de todos los productos, agrupados por producto.
+  useEffect(() => {
+    if (!db) return undefined;
+
+    return onSnapshot(
+      collectionGroup(db, 'lotes'),
+      (snapshot) => {
+        const agrupados = {};
+        snapshot.docs.forEach((documento) => {
+          const productoId = documento.ref.parent.parent?.id;
+          if (!productoId) return;
+          if (!agrupados[productoId]) agrupados[productoId] = [];
+          agrupados[productoId].push({ id: documento.id, ...documento.data() });
+        });
+        setLotesPorProducto(agrupados);
+        setErrorLotes('');
+      },
+      (error) => {
+        console.error('Error al cargar lotes:', error);
+        setErrorLotes('No se pudieron cargar los lotes. Revisa las reglas de Firestore.');
+      },
+    );
+  }, []);
+
+  const lotesDe = (producto) => {
+    const lotes = [...(lotesPorProducto[producto.id] ?? [])];
+    const tieneDatosAnteriores = producto.lote !== undefined || producto.stock !== undefined;
+    if (tieneDatosAnteriores) {
+      lotes.push({
+        id: `anterior-${producto.id}`,
+        numero: producto.lote ? String(producto.lote) : 'Sin número',
+        cantidad: Number(producto.stock) || 0,
+        fechaVencimiento: producto.fechaVencimiento || '',
+        creadoEn: producto.creadoEn,
+        anterior: true,
+      });
+    }
+    return ordenarLotes(lotes);
+  };
+
+  const categorias = useMemo(() => {
+    const vistas = new Map();
+    productos.forEach((producto) => {
+      const categoria = String(producto.categoria ?? '').trim();
+      if (categoria && !vistas.has(normalizar(categoria))) {
+        vistas.set(normalizar(categoria), categoria);
+      }
+    });
+    return [...vistas.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [productos]);
+
+  const productosFiltrados = useMemo(() => {
+    const consulta = normalizar(busqueda);
+    return productos
+      .filter((producto) => {
+        const estado = producto.estado === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO';
+        if (estadoFiltro !== 'TODOS' && estado !== estadoFiltro) return false;
+        if (categoriaFiltro !== 'TODAS' && normalizar(producto.categoria) !== normalizar(categoriaFiltro)) {
+          return false;
+        }
+        if (!consulta) return true;
+        return [producto.nombre, producto.marca, producto.categoria]
+          .some((campo) => normalizar(campo).includes(consulta));
+      })
+      .sort((a, b) => String(a.nombre ?? '').localeCompare(String(b.nombre ?? ''), undefined, {
+        sensitivity: 'base',
+      }));
+  }, [busqueda, categoriaFiltro, estadoFiltro, productos]);
+
+  const totalActivos = productos.filter((producto) => producto.estado !== 'INACTIVO').length;
+  const productoDetalle = productos.find((producto) => producto.id === productoDetalleId) ?? null;
+
   const actualizarCampo = (campo, valor) => {
     setFormulario((actual) => ({ ...actual, [campo]: valor }));
+    if (erroresFormulario[campo]) {
+      setErroresFormulario((actual) => ({ ...actual, [campo]: undefined }));
+    }
+  };
+
+  const abrirFormularioNuevo = () => {
+    setProductoEditando(null);
+    setFormulario(FORMULARIO_VACIO);
+    setErroresFormulario({});
+    setFormularioVisible(true);
+  };
+
+  const abrirFormularioEdicion = (producto) => {
+    setProductoDetalleId(null);
+    setProductoEditando(producto);
+    setFormulario({
+      nombre: producto.nombre ?? '',
+      categoria: producto.categoria ?? '',
+      marca: producto.marca ?? '',
+      precio: producto.precio !== undefined ? String(producto.precio) : '',
+      estado: producto.estado === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO',
+    });
+    setErroresFormulario({});
+    setFormularioVisible(true);
   };
 
   const cerrarFormulario = () => {
@@ -141,190 +334,79 @@ export default function GestionInventario({ navigation, route }) {
     setProductoEditando(null);
   };
 
-  const abrirFormularioNuevo = () => {
-    setProductoEditando(null);
-    setFormulario({
-      nombre: '',
-      lote: '',
-      stock: '',
-      precio: '',
-      estado: 'ACTIVO',
-      fechaVencimiento: '',
-      categoria: '',
-      marca: '',
-    });
-    setFormularioVisible(true);
-  };
-
-  const abrirFormularioEdicion = (producto) => {
-    setProductoEditando(producto);
-    setFormulario({
-      nombre: producto.nombre ?? '',
-      lote: producto.lote ?? '',
-      stock: String(producto.stock ?? ''),
-      precio: String(producto.precio ?? ''),
-      estado: producto.estado === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO',
-      fechaVencimiento: producto.fechaVencimiento ?? '',
-      categoria: producto.categoria ?? '',
-      marca: producto.marca ?? '',
-    });
-    setFormularioVisible(true);
-  };
-
-  const eliminarProducto = async () => {
-    if (!db || !productoPorEliminar?.id) {
-      Alert.alert('Error', 'No se pudo identificar el producto para eliminarlo.');
-      return;
-    }
-
-    setEliminando(true);
-    try {
-      await deleteDoc(doc(db, 'productos', productoPorEliminar.id));
-      setProductoPorEliminar(null);
-    } catch (error) {
-      console.error('Error al eliminar producto:', error);
-      Alert.alert(
-        'No se pudo eliminar',
-        'Verifica tu conexión y que las reglas de Firestore permitan eliminar productos.',
-      );
-    } finally {
-      setEliminando(false);
-    }
-  };
-
-  const registrarProducto = async () => {
+  const validarFormulario = () => {
+    const errores = {};
     const nombre = formulario.nombre.trim();
-    const lote = formulario.lote.trim();
-    const stock = Number(formulario.stock);
-    const precio = Number(formulario.precio);
-    const fechaVencimiento = fechaVencimientoBloqueada
-      ? productoEditando.fechaVencimiento
-      : formulario.fechaVencimiento.trim();
-
-    if (
-      !nombre
-      || (!productoEditando && !lote)
-      || formulario.stock.trim() === ''
-      || formulario.precio.trim() === ''
-    ) {
-      Alert.alert(
-        'Datos incompletos',
-        productoEditando
-          ? 'Ingresa el nombre, el stock y el precio del producto.'
-          : 'Ingresa el nombre, el lote, el stock y el precio del producto.',
-      );
-      return;
-    }
-
-    if (!contieneLetras(nombre)) {
-      Alert.alert('Nombre inválido', 'El nombre debe incluir al menos una letra; no puede contener solo números.');
-      return;
-    }
-
-    if (!productoEditando && !/^\d+$/.test(lote)) {
-      Alert.alert('Lote inválido', 'El lote debe contener solo números.');
-      return;
-    }
-
     const categoria = formulario.categoria.trim();
-    if (categoria && !categoriaValida(categoria)) {
-      Alert.alert('Categoría inválida', 'La categoría solo puede contener letras y espacios.');
-      return;
-    }
-
     const marca = formulario.marca.trim();
-    if (marca && !contieneLetras(marca)) {
-      Alert.alert('Marca inválida', 'La marca debe incluir al menos una letra; no puede contener solo números.');
-      return;
+    const precioTexto = formulario.precio.trim().replace(',', '.');
+    const precio = Number(precioTexto);
+
+    if (!nombre) errores.nombre = 'Ingresa el nombre del producto.';
+    else if (!contieneLetras(nombre)) errores.nombre = 'El nombre debe incluir al menos una letra.';
+
+    if (!categoria) errores.categoria = 'Ingresa o elige una categoría.';
+    else if (!categoriaValida(categoria)) errores.categoria = 'Solo letras y espacios.';
+
+    if (marca && !contieneLetras(marca)) errores.marca = 'La marca debe incluir al menos una letra.';
+
+    if (!precioTexto) errores.precio = 'Ingresa el precio de venta.';
+    else if (!Number.isFinite(precio) || precio <= 0) errores.precio = 'Debe ser un número mayor que cero.';
+
+    if (!errores.nombre) {
+      const duplicado = productos.find((producto) => (
+        producto.id !== productoEditando?.id
+        && normalizar(producto.nombre) === normalizar(nombre)
+        && normalizar(producto.marca) === normalizar(marca)
+      ));
+      if (duplicado) errores.nombre = 'Ya existe un producto con ese nombre y marca.';
     }
 
-    if (!Number.isInteger(stock) || stock < 0) {
-      Alert.alert('Stock inválido', 'El stock debe ser un número entero igual o mayor que cero.');
+    return {
+      errores,
+      datos: {
+        nombre,
+        categoria,
+        marca,
+        precio: Math.round(precio * 100) / 100,
+        estado: formulario.estado,
+      },
+    };
+  };
+
+  const guardarProducto = async () => {
+    const { errores, datos } = validarFormulario();
+    if (Object.keys(errores).length > 0) {
+      setErroresFormulario(errores);
       return;
-    }
-
-    if (!Number.isFinite(precio) || precio < 0) {
-      Alert.alert('Precio inválido', 'El precio debe ser un número igual o mayor que cero.');
-      return;
-    }
-
-    if (fechaVencimiento && !fechaVencimientoBloqueada) {
-      const partesFecha = fechaVencimiento.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (!partesFecha) {
-        Alert.alert('Fecha inválida', 'Usa el formato AAAA-MM-DD para la fecha de vencimiento.');
-        return;
-      }
-
-      const [, anio, mes, dia] = partesFecha;
-      const fecha = new Date(Date.UTC(Number(anio), Number(mes) - 1, Number(dia)));
-      if (
-        fecha.getUTCFullYear() !== Number(anio)
-        || fecha.getUTCMonth() !== Number(mes) - 1
-        || fecha.getUTCDate() !== Number(dia)
-      ) {
-        Alert.alert('Fecha inválida', 'Ingresa una fecha de vencimiento válida.');
-        return;
-      }
-
-      if (fechaVencimiento <= obtenerFechaLocal()) {
-        Alert.alert(
-          'Fecha de vencimiento inválida',
-          'La fecha de vencimiento debe ser posterior al día de hoy.',
-        );
-        return;
-      }
     }
 
     if (!db) {
-      Alert.alert('Error', 'No se pudo conectar con la base de datos de inventario.');
+      Alert.alert('Error', 'No se pudo conectar con la base de datos.');
       return;
     }
 
     setGuardando(true);
     try {
-      const datosProducto = {
-        nombre,
-        stock,
-        precio,
-        estado: formulario.estado,
-        fechaVencimiento,
-        categoria,
-        marca,
-      };
-
       if (productoEditando) {
         await updateDoc(doc(db, 'productos', productoEditando.id), {
-          ...datosProducto,
+          ...datos,
           actualizadoEn: serverTimestamp(),
         });
       } else {
         await addDoc(collection(db, 'productos'), {
-          ...datosProducto,
-          lote,
+          ...datos,
           creadoEn: serverTimestamp(),
         });
       }
-
-      setFormulario({
-        nombre: '',
-        lote: '',
-        stock: '',
-        precio: '',
-        estado: 'ACTIVO',
-        fechaVencimiento: '',
-        categoria: '',
-        marca: '',
-      });
       setFormularioVisible(false);
       setProductoEditando(null);
+      setFormulario(FORMULARIO_VACIO);
     } catch (error) {
-      console.error(
-        productoEditando ? 'Error al actualizar producto:' : 'Error al registrar producto:',
-        error,
-      );
+      console.error('Error al guardar producto:', error);
       Alert.alert(
-        productoEditando ? 'No se pudo actualizar' : 'No se pudo registrar',
-        'Ocurrió un error al guardar el producto. Verifica la conexión y las reglas de Firestore e inténtalo de nuevo.',
+        'No se pudo guardar',
+        'Ocurrió un error al guardar el producto. Verifica tu conexión e inténtalo de nuevo.',
       );
     } finally {
       setGuardando(false);
@@ -346,606 +428,503 @@ export default function GestionInventario({ navigation, route }) {
     }
   };
 
-  const productosFiltrados = useMemo(() => {
-    const consulta = busqueda.trim().toLocaleLowerCase();
-
-    const resultado = productos.filter((producto) => {
-      const nombre = String(producto.nombre ?? '').toLocaleLowerCase();
-      const lote = String(producto.lote ?? '').toLocaleLowerCase();
-      const estado = String(producto.estado ?? 'INACTIVO').toLocaleUpperCase();
-      const categoria = String(producto.categoria ?? '').trim().toLocaleLowerCase();
-
-      if (estadoFiltro !== 'TODOS' && estado !== estadoFiltro) return false;
-      if (
-        categoriaFiltro !== 'TODAS'
-        && categoria !== categoriaFiltro.toLocaleLowerCase()
-      ) return false;
-      if (!consulta) return true;
-      if (filtroSeleccionado === 'Nombre') return nombre.includes(consulta);
-      if (filtroSeleccionado === 'Lote') return lote.includes(consulta);
-      return nombre.includes(consulta) || lote.includes(consulta);
-    });
-
-    if (filtroSeleccionado === 'Lote') {
-      return resultado.sort((productoA, productoB) => (
-        String(productoA.lote ?? '').localeCompare(
-          String(productoB.lote ?? ''),
-          undefined,
-          { numeric: true, sensitivity: 'base' },
-        )
-      ));
-    }
-
-    return resultado;
-  }, [busqueda, categoriaFiltro, estadoFiltro, filtroSeleccionado, productos]);
-
-  const categorias = useMemo(() => (
-    [...new Set(
-      productos
-        .map((producto) => String(producto.categoria ?? '').trim())
-        .filter(Boolean),
-    )].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-  ), [productos]);
-
-  const hayFiltrosAplicados = estadoFiltro !== 'TODOS' || categoriaFiltro !== 'TODAS';
-
-  const renderProductCard = ({ item }) => {
-    const activo = item.estado === 'ACTIVO';
-    const stock = Number(item.stock) || 0;
-    const precio = Number(item.precio);
+  const renderProducto = ({ item }) => {
+    const activo = item.estado !== 'INACTIVO';
+    const resumen = resumirLotes(lotesDe(item));
+    const detalle = [item.categoria || 'Sin categoría', item.marca].filter(Boolean).join(' · ');
 
     return (
-      <View style={styles.productRow}>
-        <View style={styles.card}>
-          <View
-            style={[
-              styles.cardIndicator,
-              { backgroundColor: activo ? '#10B981' : '#EF4444' },
-            ]}
+      <TouchableOpacity
+        style={[styles.productCard, !activo && styles.productCardInactive]}
+        activeOpacity={0.75}
+        onPress={() => setProductoDetalleId(item.id)}
+        accessibilityRole="button"
+        accessibilityLabel={`Ver ${item.nombre || 'producto'} y sus lotes`}
+      >
+        <View style={[styles.productIcon, { backgroundColor: activo ? COLORS.greenSoft : '#F1F5F9' }]}>
+          <MaterialCommunityIcons
+            name="package-variant-closed"
+            size={24}
+            color={activo ? COLORS.green : COLORS.muted}
           />
-          <View style={styles.cardContent}>
-            <View style={styles.rowTop}>
-              <View style={styles.nombreContainer}>
-                <Text style={styles.productName}>{item.nombre || 'Producto sin nombre'}</Text>
-                <Text style={styles.loteText}>Lote: {item.lote || 'Sin lote'}</Text>
-              </View>
+        </View>
 
-              <View style={styles.stockContainer}>
-                <Text style={styles.stockLabel}>
-                  Stock{' '}
-                  <Text style={[styles.stockNumber, stock <= 5 && styles.stockWarning]}>
-                    {stock}
-                  </Text>
-                </Text>
-              </View>
+        <View style={styles.productBody}>
+          <View style={styles.productTopRow}>
+            <Text style={styles.productName} numberOfLines={1}>
+              {item.nombre || 'Producto sin nombre'}
+            </Text>
+            <Text style={styles.productPrice}>{formatearPrecio(item.precio)}</Text>
+          </View>
+          <Text style={styles.productMeta} numberOfLines={1}>{detalle}</Text>
 
-              <View style={styles.precioContainer}>
-                <Text style={styles.precioText}>
-                  {Number.isFinite(precio) ? `$${precio.toFixed(2)}` : '—'}
-                </Text>
-                <View
-                  style={[
-                    styles.badge,
-                    { backgroundColor: activo ? '#D1FAE5' : '#FEE2E2' },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.badgeText,
-                      { color: activo ? '#047857' : '#B91C1C' },
-                    ]}
-                  >
-                    {item.estado || 'INACTIVO'}
-                  </Text>
-                </View>
-              </View>
+          <View style={styles.chipsRow}>
+            <View style={[styles.chip, { backgroundColor: activo ? COLORS.greenSoft : '#F1F5F9' }]}>
+              <View style={[styles.dot, { backgroundColor: activo ? COLORS.green : COLORS.muted }]} />
+              <Text style={[styles.chipText, { color: activo ? COLORS.green : COLORS.muted }]}>
+                {activo ? 'Activo' : 'Inactivo'}
+              </Text>
             </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.rowBottom}>
-              <View style={styles.expiryContainer}>
-                <Text style={styles.metaLabel}>FECHA DE VENCIMIENTO</Text>
-                <Text style={styles.metaValue}>{item.fechaVencimiento || 'N/A'}</Text>
-              </View>
-              <View style={styles.categoryContainer}>
-                <Text style={styles.metaLabel}>
-                  {item.categoria ? String(item.categoria).toUpperCase() : 'GENERAL'}
-                </Text>
-                <Text style={styles.metaValue}>{item.marca || 'Sin marca'}</Text>
-              </View>
+            <View style={[styles.chip, { backgroundColor: COLORS.navySoft }]}>
+              <Text style={[styles.chipText, { color: COLORS.navy }]}>
+                Stock {resumen.stock} · {resumen.cantidad} {resumen.cantidad === 1 ? 'lote' : 'lotes'}
+              </Text>
             </View>
+            {resumen.vencidos > 0 ? (
+              <View style={[styles.chip, { backgroundColor: COLORS.redSoft }]}>
+                <Text style={[styles.chipText, { color: COLORS.red }]}>
+                  {resumen.vencidos} vencido{resumen.vencidos === 1 ? '' : 's'}
+                </Text>
+              </View>
+            ) : null}
+            {resumen.porVencer > 0 ? (
+              <View style={[styles.chip, { backgroundColor: COLORS.amberSoft }]}>
+                <Text style={[styles.chipText, { color: COLORS.amber }]}>
+                  {resumen.porVencer} por vencer
+                </Text>
+              </View>
+            ) : null}
           </View>
         </View>
-        <View style={styles.productActions}>
-          <TouchableOpacity
-            style={styles.editProductButton}
-            onPress={() => abrirFormularioEdicion(item)}
-            accessibilityRole="button"
-            accessibilityLabel={`Editar ${item.nombre || 'producto'}`}
-            hitSlop={8}
-          >
-            <Feather name="edit-2" size={17} color="#2563EB" />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteProductButton}
-            onPress={() => setProductoPorEliminar(item)}
-            accessibilityRole="button"
-            accessibilityLabel={`Eliminar ${item.nombre || 'producto'}`}
-            hitSlop={8}
-          >
-            <Feather name="trash-2" size={17} color="#DC2626" />
-          </TouchableOpacity>
-        </View>
-      </View>
+
+        <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+      </TouchableOpacity>
     );
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            onPress={() => setMenuVisible(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Abrir menú"
-            hitSlop={10}
-          >
-            <Ionicons name="menu-outline" size={36} color="#1E293B" />
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity
-          onPress={() => {
-            setMenuVisible(false);
-            navigation.navigate('Home');
-          }}
-          accessibilityRole="button"
-          accessibilityLabel="Volver al menú principal"
-          hitSlop={10}
-        >
-          <Image
-            source={require('../assets/logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-            accessibilityLabel="Almacén El Refugio"
-          />
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.screenTitle}>Gestión de Inventario</Text>
-
+  const renderEncabezadoLista = () => (
+    <View>
       <View style={styles.searchBox}>
-        <Ionicons
-          name="search-outline"
-          size={18}
-          color="#64748B"
-          style={styles.searchIcon}
-        />
+        <Ionicons name="search-outline" size={18} color={COLORS.muted} />
         <TextInput
-          placeholder={
-            filtroSeleccionado === 'Lote'
-              ? 'Buscar por lote'
-              : filtroSeleccionado === 'Nombre'
-                ? 'Buscar por nombre del producto'
-                : 'Buscar por nombre o lote'
-          }
+          placeholder="Buscar por nombre, marca o categoría"
           placeholderTextColor="#94A3B8"
           style={styles.searchInput}
           value={busqueda}
           onChangeText={setBusqueda}
           accessibilityLabel="Buscar productos"
+          returnKeyType="search"
         />
+        {busqueda ? (
+          <TouchableOpacity onPress={() => setBusqueda('')} hitSlop={10} accessibilityLabel="Borrar búsqueda">
+            <Ionicons name="close-circle" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
-      <View style={styles.tabContainer}>
-        {filtros.map((filtro) => (
-          <TouchableOpacity
-            key={filtro}
-            style={[
-              styles.tabButton,
-              filtroSeleccionado === filtro && styles.tabActive,
-            ]}
-            onPress={() => setFiltroSeleccionado(filtro)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: filtroSeleccionado === filtro }}
-          >
-            <Text
-              style={[
-                styles.tabText,
-                filtroSeleccionado === filtro && styles.tabTextActive,
-              ]}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.categoryChips}
+      >
+        {['TODAS', ...categorias].map((categoria) => {
+          const seleccionada = normalizar(categoriaFiltro) === normalizar(categoria);
+          return (
+            <TouchableOpacity
+              key={categoria}
+              style={[styles.filterChip, seleccionada && styles.filterChipSelected]}
+              onPress={() => setCategoriaFiltro(categoria)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: seleccionada }}
             >
-              {filtro}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <Text style={[styles.filterChipText, seleccionada && styles.filterChipTextSelected]}>
+                {categoria === 'TODAS' ? 'Todas' : categoria}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.listHeaderRow}>
+        <Text style={styles.listHeaderText}>
+          {productosFiltrados.length} {productosFiltrados.length === 1 ? 'producto' : 'productos'}
+        </Text>
+        <View style={styles.segmented}>
+          {[
+            ['TODOS', 'Todos'],
+            ['ACTIVO', 'Activos'],
+            ['INACTIVO', 'Inactivos'],
+          ].map(([valor, etiqueta]) => (
+            <TouchableOpacity
+              key={valor}
+              style={[styles.segment, estadoFiltro === valor && styles.segmentSelected]}
+              onPress={() => setEstadoFiltro(valor)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: estadoFiltro === valor }}
+            >
+              <Text style={[styles.segmentText, estadoFiltro === valor && styles.segmentTextSelected]}>
+                {etiqueta}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
-      <View style={styles.subHeader}>
-        <Text style={styles.subTitle}>Productos registrados</Text>
-        <View style={styles.subHeaderActions}>
+      {errorInventario ? <Text style={styles.errorBanner}>{errorInventario}</Text> : null}
+      {errorLotes ? <Text style={styles.warningBanner}>{errorLotes}</Text> : null}
+    </View>
+  );
+
+  const renderDetalle = () => {
+    if (!productoDetalle) return null;
+    const activo = productoDetalle.estado !== 'INACTIVO';
+    const lotes = lotesDe(productoDetalle);
+    const resumen = resumirLotes(lotes);
+
+    return (
+      <View style={styles.sheet}>
+        <View style={styles.sheetHandle} />
+        <View style={styles.sheetHeader}>
+          <View style={styles.sheetTitleBox}>
+            <Text style={styles.sheetTitle} numberOfLines={2}>{productoDetalle.nombre}</Text>
+            <Text style={styles.sheetSubtitle}>{productoDetalle.categoria || 'Sin categoría'}</Text>
+          </View>
           <TouchableOpacity
-            style={[styles.filterButton, hayFiltrosAplicados && styles.filterButtonActive]}
-            onPress={() => setFiltrosVisibles(true)}
+            style={styles.closeCircle}
+            onPress={() => setProductoDetalleId(null)}
             accessibilityRole="button"
-            accessibilityLabel="Filtrar productos por estado o categoría"
+            accessibilityLabel="Cerrar detalle"
           >
-            <Ionicons
-              name="funnel-outline"
-              size={15}
-              color={hayFiltrosAplicados ? '#FFFFFF' : '#2563EB'}
-            />
-            <Text style={[styles.filterButtonText, hayFiltrosAplicados && styles.filterButtonTextActive]}>
-              Filtrar
-            </Text>
+            <Ionicons name="close" size={22} color={COLORS.muted} />
           </TouchableOpacity>
-          <Text style={styles.resultCount}>{productosFiltrados.length}</Text>
         </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetContent}>
+          <View style={styles.infoGrid}>
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>Precio de venta</Text>
+              <Text style={styles.infoValueStrong}>{formatearPrecio(productoDetalle.precio)}</Text>
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>Estado</Text>
+              <Text style={[styles.infoValue, { color: activo ? COLORS.green : COLORS.muted }]}>
+                {activo ? 'Activo' : 'Inactivo'}
+              </Text>
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>Marca</Text>
+              <Text style={styles.infoValue} numberOfLines={1}>{productoDetalle.marca || 'Sin marca'}</Text>
+            </View>
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>Stock vigente</Text>
+              <Text style={styles.infoValue}>{resumen.stock} u.</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={styles.editButtonOutline}
+            onPress={() => abrirFormularioEdicion(productoDetalle)}
+            accessibilityRole="button"
+          >
+            <Feather name="edit-2" size={16} color={COLORS.navy} />
+            <Text style={styles.editButtonOutlineText}>Editar datos del producto</Text>
+          </TouchableOpacity>
+
+          <View style={styles.lotesHeader}>
+            <Text style={styles.sectionTitle}>Lotes</Text>
+            <Text style={styles.lotesCount}>
+              {resumen.cantidad} {resumen.cantidad === 1 ? 'lote' : 'lotes'}
+            </Text>
+          </View>
+
+          {errorLotes ? <Text style={styles.warningBanner}>{errorLotes}</Text> : null}
+
+          {lotes.length === 0 ? (
+            <View style={styles.emptyLotes}>
+              <MaterialCommunityIcons name="package-variant" size={36} color="#94A3B8" />
+              <Text style={styles.emptyLotesTitle}>Sin lotes registrados</Text>
+              <Text style={styles.emptyLotesText}>
+                Los lotes se agregan al registrar una compra de este producto.
+              </Text>
+            </View>
+          ) : (
+            lotes.map((lote) => {
+              const estilo = ESTILO_LOTE[estadoDelLote(lote)];
+              const vence = formatearFecha(lote.fechaVencimiento);
+              const ingreso = formatearFecha(lote.creadoEn);
+              return (
+                <View key={lote.id} style={styles.loteCard}>
+                  <View style={[styles.loteStripe, { backgroundColor: estilo.color }]} />
+                  <View style={styles.loteBody}>
+                    <View style={styles.loteTopRow}>
+                      <Text style={styles.loteNumero} numberOfLines={1}>Lote {lote.numero || 'sin número'}</Text>
+                      <View style={[styles.chip, { backgroundColor: estilo.fondo }]}>
+                        <Text style={[styles.chipText, { color: estilo.color }]}>{estilo.texto}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.loteDatos}>
+                      <View style={styles.loteDato}>
+                        <Text style={styles.infoLabel}>Cantidad</Text>
+                        <Text style={styles.loteDatoValor}>{Number(lote.cantidad) || 0} u.</Text>
+                      </View>
+                      <View style={styles.loteDato}>
+                        <Text style={styles.infoLabel}>Vence</Text>
+                        <Text style={styles.loteDatoValor}>{vence || '—'}</Text>
+                      </View>
+                      <View style={styles.loteDato}>
+                        <Text style={styles.infoLabel}>Ingreso</Text>
+                        <Text style={styles.loteDatoValor}>{ingreso || '—'}</Text>
+                      </View>
+                    </View>
+                    {lote.costoUnitario !== undefined ? (
+                      <Text style={styles.loteCosto}>
+                        Costo {formatearPrecio(lote.costoUnitario)} c/u
+                      </Text>
+                    ) : null}
+                    {lote.anterior ? (
+                      <Text style={styles.loteAnterior}>Registro anterior al nuevo catálogo</Text>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+      </View>
+    );
+  };
+
+  const renderCampo = ({ campo, etiqueta, placeholder, opcional, ...props }) => (
+    <View style={styles.field}>
+      <Text style={styles.inputLabel}>
+        {etiqueta}
+        {opcional ? <Text style={styles.optionalLabel}> (opcional)</Text> : null}
+      </Text>
+      <TextInput
+        style={[styles.formInput, erroresFormulario[campo] && styles.formInputError]}
+        value={formulario[campo]}
+        onChangeText={(valor) => actualizarCampo(campo, valor)}
+        placeholder={placeholder}
+        placeholderTextColor="#94A3B8"
+        editable={!guardando}
+        {...props}
+      />
+      {erroresFormulario[campo] ? (
+        <Text style={styles.fieldError}>{erroresFormulario[campo]}</Text>
+      ) : null}
+    </View>
+  );
+
+  const sugerenciasCategoria = categorias.filter((categoria) => {
+    const consulta = normalizar(formulario.categoria);
+    return normalizar(categoria) !== consulta && (!consulta || normalizar(categoria).includes(consulta));
+  }).slice(0, 8);
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <View style={styles.topBar}>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Volver al inicio"
+        >
+          <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+        </TouchableOpacity>
+        <View style={styles.titleBox}>
+          <Text style={styles.screenTitle}>Productos</Text>
+          <Text style={styles.screenSubtitle}>
+            {productos.length} en catálogo · {totalActivos} activos
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={() => setMenuVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Abrir menú"
+        >
+          <Ionicons name="menu-outline" size={24} color={COLORS.text} />
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity
         style={styles.addButton}
         onPress={abrirFormularioNuevo}
-        activeOpacity={0.8}
+        activeOpacity={0.85}
         accessibilityRole="button"
+        accessibilityLabel="Agregar producto"
       >
-        <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
-        <Text style={styles.addButtonText}>Registrar producto</Text>
+        <Ionicons name="add-circle" size={22} color="#FFFFFF" />
+        <Text style={styles.addButtonText}>Agregar producto</Text>
       </TouchableOpacity>
-
-      {errorInventario ? (
-        <Text style={styles.errorMessage}>{errorInventario}</Text>
-      ) : null}
 
       <FlatList
         data={productosFiltrados}
-        keyExtractor={(item, index) =>
-          item.id ? String(item.id) : `${item.nombre || 'producto'}-${index}`
-        }
-        renderItem={renderProductCard}
+        keyExtractor={(item) => item.id}
+        renderItem={renderProducto}
+        ListHeaderComponent={renderEncabezadoLista()}
+        keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <MaterialCommunityIcons
-              name="package-variant-remove"
-              size={48}
-              color="#94A3B8"
-            />
-            <Text style={styles.emptyText}>
-              {busqueda || hayFiltrosAplicados
-                ? 'No se encontraron productos con esa búsqueda'
-                : 'No hay productos registrados disponibles'}
-            </Text>
-          </View>
-        }
-        ListFooterComponent={
-          <View style={styles.copyrightContainer}>
-            <Text style={styles.copyrightText}>
-              © 2026 InventoryMaster Pro. Todos los derechos reservados.
-            </Text>
-            <Text style={styles.legalLinks}>
-              Términos de Servicio  |  Privacidad  |  Soporte Técnico
-            </Text>
-          </View>
+          cargando ? (
+            <Text style={styles.emptyText}>Cargando productos...</Text>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <MaterialCommunityIcons name="package-variant-remove" size={48} color="#94A3B8" />
+              <Text style={styles.emptyTitle}>
+                {busqueda || estadoFiltro !== 'TODOS' || categoriaFiltro !== 'TODAS'
+                  ? 'Sin resultados'
+                  : 'Tu catálogo está vacío'}
+              </Text>
+              <Text style={styles.emptyText}>
+                {busqueda || estadoFiltro !== 'TODOS' || categoriaFiltro !== 'TODAS'
+                  ? 'Prueba con otra búsqueda o quita los filtros.'
+                  : 'Agrega tu primer producto con el botón de arriba.'}
+              </Text>
+            </View>
+          )
         }
       />
 
+      {/* Detalle del producto con sus lotes */}
       <Modal
-        visible={filtrosVisibles}
+        visible={Boolean(productoDetalle)}
         transparent
-        animationType="fade"
-        onRequestClose={() => setFiltrosVisibles(false)}
+        animationType="slide"
+        onRequestClose={() => setProductoDetalleId(null)}
       >
-        <View style={styles.confirmModalOverlay}>
-          <TouchableWithoutFeedback onPress={() => setFiltrosVisibles(false)}>
-            <View style={styles.confirmBackdrop} />
+        <View style={styles.sheetOverlay}>
+          <TouchableWithoutFeedback onPress={() => setProductoDetalleId(null)}>
+            <View style={styles.sheetBackdrop} />
           </TouchableWithoutFeedback>
-          <View style={styles.filterModalCard}>
-            <View style={styles.formHeader}>
-              <Text style={styles.formTitle}>Filtrar productos</Text>
-              <TouchableOpacity
-                onPress={() => setFiltrosVisibles(false)}
-                accessibilityRole="button"
-                accessibilityLabel="Cerrar filtros"
-              >
-                <Ionicons name="close" size={26} color="#64748B" />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.filterSectionTitle}>Estado</Text>
-            <View style={styles.filterOptions}>
-              {['TODOS', 'ACTIVO', 'INACTIVO'].map((estado) => (
-                <TouchableOpacity
-                  key={estado}
-                  style={[
-                    styles.filterOption,
-                    estadoFiltro === estado && styles.filterOptionSelected,
-                  ]}
-                  onPress={() => setEstadoFiltro(estado)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: estadoFiltro === estado }}
-                >
-                  <Text
-                    style={[
-                      styles.filterOptionText,
-                      estadoFiltro === estado && styles.filterOptionTextSelected,
-                    ]}
-                  >
-                    {estado === 'TODOS' ? 'Todos' : estado}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.filterSectionTitle}>Categoría</Text>
-            <ScrollView
-              style={styles.categoryFilterList}
-              showsVerticalScrollIndicator={false}
-            >
-              {['TODAS', ...categorias].map((categoria) => (
-                <TouchableOpacity
-                  key={categoria}
-                  style={styles.categoryFilterOption}
-                  onPress={() => setCategoriaFiltro(categoria)}
-                  accessibilityRole="button"
-                  accessibilityState={{
-                    selected: categoriaFiltro.toLocaleLowerCase() === categoria.toLocaleLowerCase(),
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.filterOptionText,
-                      categoriaFiltro.toLocaleLowerCase() === categoria.toLocaleLowerCase()
-                        && styles.filterOptionTextSelected,
-                    ]}
-                  >
-                    {categoria === 'TODAS' ? 'Todas las categorías' : categoria}
-                  </Text>
-                  {categoriaFiltro.toLocaleLowerCase() === categoria.toLocaleLowerCase() ? (
-                    <Ionicons name="checkmark" size={18} color="#0F766E" />
-                  ) : null}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <View style={styles.filterModalActions}>
-              <TouchableOpacity
-                style={styles.clearFiltersButton}
-                onPress={() => {
-                  setEstadoFiltro('TODOS');
-                  setCategoriaFiltro('TODAS');
-                }}
-                accessibilityRole="button"
-              >
-                <Text style={styles.clearFiltersText}>Limpiar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.applyFiltersButton}
-                onPress={() => setFiltrosVisibles(false)}
-                accessibilityRole="button"
-              >
-                <Text style={styles.applyFiltersText}>Ver {productosFiltrados.length} productos</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          {renderDetalle()}
         </View>
       </Modal>
 
-      <Modal
-        visible={Boolean(productoPorEliminar)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (!eliminando) setProductoPorEliminar(null);
-        }}
-      >
-        <View style={styles.confirmModalOverlay}>
-          <TouchableWithoutFeedback
-            onPress={() => {
-              if (!eliminando) setProductoPorEliminar(null);
-            }}
-          >
-            <View style={styles.confirmBackdrop} />
-          </TouchableWithoutFeedback>
-          <View style={styles.confirmCard}>
-            <View style={styles.confirmIcon}>
-              <Feather name="trash-2" size={22} color="#DC2626" />
-            </View>
-            <Text style={styles.confirmTitle}>¿Eliminar producto?</Text>
-            <Text style={styles.confirmMessage}>
-              Se eliminará {productoPorEliminar?.nombre || 'este producto'} del inventario.
-              Esta acción no se puede deshacer.
-            </Text>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={styles.cancelDeleteButton}
-                onPress={() => setProductoPorEliminar(null)}
-                disabled={eliminando}
-                accessibilityRole="button"
-              >
-                <Text style={styles.cancelDeleteText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.confirmDeleteButton,
-                  eliminando && styles.saveButtonDisabled,
-                ]}
-                onPress={eliminarProducto}
-                disabled={eliminando}
-                accessibilityRole="button"
-              >
-                <Text style={styles.confirmDeleteText}>
-                  {eliminando ? 'Eliminando...' : 'Eliminar'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
+      {/* Formulario: agregar / editar */}
       <Modal
         visible={formularioVisible}
         transparent
         animationType="slide"
         onRequestClose={cerrarFormulario}
       >
-        <View style={styles.formModalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.sheetOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <TouchableWithoutFeedback onPress={cerrarFormulario}>
-            <View style={styles.formBackdrop} />
+            <View style={styles.sheetBackdrop} />
           </TouchableWithoutFeedback>
-          <View style={styles.formModalCard}>
-            <View style={styles.formHeader}>
-              <Text style={styles.formTitle}>
-                {productoEditando ? 'Editar producto' : 'Registrar producto'}
-              </Text>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetTitleBox}>
+                <Text style={styles.sheetTitle}>
+                  {productoEditando ? 'Editar producto' : 'Nuevo producto'}
+                </Text>
+                <Text style={styles.sheetSubtitle}>
+                  {productoEditando ? 'Actualiza los datos del catálogo' : 'Agrégalo al catálogo del almacén'}
+                </Text>
+              </View>
               <TouchableOpacity
+                style={styles.closeCircle}
                 onPress={cerrarFormulario}
+                disabled={guardando}
                 accessibilityRole="button"
                 accessibilityLabel="Cerrar formulario"
-                disabled={guardando}
               >
-                <Ionicons name="close" size={26} color="#64748B" />
+                <Ionicons name="close" size={22} color={COLORS.muted} />
               </TouchableOpacity>
             </View>
 
             <ScrollView
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.formContent}
+              contentContainerStyle={styles.sheetContent}
             >
-              <Text style={styles.inputLabel}>Nombre *</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formulario.nombre}
-                onChangeText={(valor) => actualizarCampo('nombre', valor)}
-                placeholder="Nombre del producto"
-                placeholderTextColor="#94A3B8"
-                maxLength={100}
-              />
+              {renderCampo({
+                campo: 'nombre',
+                etiqueta: 'Nombre',
+                placeholder: 'Ej.: Arroz grado 1, 1 kg',
+                maxLength: 100,
+              })}
 
-              {!productoEditando ? (
-                <>
-                  <Text style={styles.inputLabel}>Lote *</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    value={formulario.lote}
-                    onChangeText={(valor) => actualizarCampo('lote', valor)}
-                    placeholder="Número o código de lote"
-                    placeholderTextColor="#94A3B8"
-                    maxLength={60}
-                    autoCapitalize="characters"
-                  />
-                </>
+              {renderCampo({
+                campo: 'categoria',
+                etiqueta: 'Categoría',
+                placeholder: 'Ej.: Abarrotes',
+                maxLength: 60,
+              })}
+              {sugerenciasCategoria.length > 0 ? (
+                <View style={styles.suggestions}>
+                  {sugerenciasCategoria.map((categoria) => (
+                    <TouchableOpacity
+                      key={categoria}
+                      style={styles.suggestionChip}
+                      onPress={() => actualizarCampo('categoria', categoria)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Usar categoría ${categoria}`}
+                    >
+                      <Text style={styles.suggestionText}>{categoria}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               ) : null}
 
-              <View style={styles.formRow}>
-                <View style={styles.formColumn}>
-                  <Text style={styles.inputLabel}>Stock *</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    value={formulario.stock}
-                    onChangeText={(valor) => actualizarCampo('stock', valor)}
-                    placeholder="0"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="number-pad"
-                  />
-                </View>
-                <View style={styles.formColumn}>
-                  <Text style={styles.inputLabel}>Precio *</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    value={formulario.precio}
-                    onChangeText={(valor) => actualizarCampo('precio', valor)}
-                    placeholder="0.00"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="decimal-pad"
-                  />
-                </View>
-              </View>
+              {renderCampo({
+                campo: 'marca',
+                etiqueta: 'Marca',
+                placeholder: 'Ej.: Tucapel',
+                opcional: true,
+                maxLength: 60,
+              })}
+
+              {renderCampo({
+                campo: 'precio',
+                etiqueta: 'Precio de venta',
+                placeholder: '0.00',
+                keyboardType: 'decimal-pad',
+                maxLength: 12,
+              })}
 
               <Text style={styles.inputLabel}>Estado</Text>
               <View style={styles.statusOptions}>
-                {['ACTIVO', 'INACTIVO'].map((estado) => (
-                  <TouchableOpacity
-                    key={estado}
-                    style={[
-                      styles.statusOption,
-                      formulario.estado === estado && styles.statusOptionSelected,
-                    ]}
-                    onPress={() => actualizarCampo('estado', estado)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: formulario.estado === estado }}
-                  >
-                    <Text
-                      style={[
-                        styles.statusOptionText,
-                        formulario.estado === estado && styles.statusOptionTextSelected,
-                      ]}
+                {[
+                  ['ACTIVO', 'Activo', 'Disponible para la venta'],
+                  ['INACTIVO', 'Inactivo', 'Oculto de la venta'],
+                ].map(([valor, etiqueta, ayuda]) => {
+                  const seleccionado = formulario.estado === valor;
+                  return (
+                    <TouchableOpacity
+                      key={valor}
+                      style={[styles.statusOption, seleccionado && styles.statusOptionSelected]}
+                      onPress={() => actualizarCampo('estado', valor)}
+                      disabled={guardando}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: seleccionado }}
                     >
-                      {estado}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <View style={[styles.radio, seleccionado && styles.radioSelected]}>
+                        {seleccionado ? <View style={styles.radioInner} /> : null}
+                      </View>
+                      <View style={styles.statusTextBox}>
+                        <Text style={styles.statusOptionText}>{etiqueta}</Text>
+                        <Text style={styles.statusHelp}>{ayuda}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-
-              <Text style={styles.inputLabel}>Fecha de vencimiento</Text>
-              <TextInput
-                style={[
-                  styles.formInput,
-                  fechaVencimientoBloqueada && styles.formInputDisabled,
-                ]}
-                value={formulario.fechaVencimiento}
-                onChangeText={(valor) => actualizarCampo('fechaVencimiento', valor)}
-                placeholder="AAAA-MM-DD (opcional)"
-                placeholderTextColor="#94A3B8"
-                keyboardType="numbers-and-punctuation"
-                editable={!fechaVencimientoBloqueada}
-              />
-              {fechaVencimientoBloqueada ? (
-                <Text style={styles.disabledFieldHint}>
-                  El producto ya venció; no se puede modificar su fecha de vencimiento.
-                </Text>
-              ) : null}
-
-              <Text style={styles.inputLabel}>Categoría</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formulario.categoria}
-                onChangeText={(valor) => actualizarCampo('categoria', valor)}
-                placeholder="Categoría (opcional)"
-                placeholderTextColor="#94A3B8"
-                maxLength={60}
-              />
-
-              <Text style={styles.inputLabel}>Marca</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formulario.marca}
-                onChangeText={(valor) => actualizarCampo('marca', valor)}
-                placeholder="Marca (opcional)"
-                placeholderTextColor="#94A3B8"
-                maxLength={60}
-              />
 
               <TouchableOpacity
                 style={[styles.saveButton, guardando && styles.saveButtonDisabled]}
-                onPress={registrarProducto}
-                activeOpacity={0.8}
+                onPress={guardarProducto}
+                activeOpacity={0.85}
                 disabled={guardando}
                 accessibilityRole="button"
               >
                 <Text style={styles.saveButtonText}>
                   {guardando
-                    ? productoEditando ? 'Guardando cambios...' : 'Guardando...'
-                    : productoEditando ? 'Guardar cambios' : 'Guardar producto'}
+                    ? 'Guardando...'
+                    : productoEditando ? 'Guardar cambios' : 'Agregar al catálogo'}
                 </Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
+      {/* Menú lateral */}
       <Modal
         visible={menuVisible}
         transparent
@@ -987,7 +966,13 @@ export default function GestionInventario({ navigation, route }) {
                   key={item.id}
                   style={styles.drawerButton}
                   activeOpacity={0.7}
-                  onPress={() => item.title === 'Producto' && setMenuVisible(false)}
+                  onPress={() => {
+                    if (item.title === 'Producto') setMenuVisible(false);
+                    if (item.title === 'Compras') {
+                      setMenuVisible(false);
+                      navigation.navigate('Purchases');
+                    }
+                  }}
                   accessibilityRole="button"
                 >
                   <View style={styles.drawerIconBox}>
@@ -1023,6 +1008,7 @@ export default function GestionInventario({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </Modal>
+
       <ProfileEditModal
         visible={profileEditorVisible}
         initialName={profileName}
@@ -1039,550 +1025,552 @@ export default function GestionInventario({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FAF6F0',
-    paddingHorizontal: 16,
-    paddingTop: 10,
+    backgroundColor: COLORS.background,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  headerActions: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 14,
   },
-  logo: {
-    width: 170,
-    height: 68,
+  iconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  titleBox: {
+    flex: 1,
+    marginHorizontal: 14,
   },
   screenTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#0F172A',
-    marginBottom: 15,
+    color: COLORS.text,
+  },
+  screenSubtitle: {
+    fontSize: 13,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
+  listContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 32,
   },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 42,
+    borderColor: COLORS.border,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    height: 50,
     marginBottom: 12,
-  },
-  searchIcon: {
-    marginRight: 8,
   },
   searchInput: {
     flex: 1,
-    fontSize: 13,
-    color: '#1E293B',
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 8,
-    padding: 3,
-    marginBottom: 16,
-  },
-  tabButton: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 6,
-  },
-  tabActive: {
-    backgroundColor: '#FFFFFF',
-    elevation: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-  },
-  tabText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  tabTextActive: {
-    color: '#0F172A',
-  },
-  subHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  subTitle: {
     fontSize: 15,
-    fontWeight: 'bold',
-    color: '#1E293B',
+    color: COLORS.text,
+    marginHorizontal: 10,
   },
-  subHeaderActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+  categoryChips: {
+    paddingBottom: 12,
   },
-  filterButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 7,
-    backgroundColor: '#EFF6FF',
-    gap: 5,
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginRight: 8,
   },
-  filterButtonActive: {
-    backgroundColor: '#2563EB',
+  filterChipSelected: {
+    backgroundColor: COLORS.navy,
+    borderColor: COLORS.navy,
   },
-  filterButtonText: {
-    color: '#2563EB',
-    fontSize: 11,
-    fontWeight: 'bold',
+  filterChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.text,
   },
-  filterButtonTextActive: {
+  filterChipTextSelected: {
     color: '#FFFFFF',
   },
-  resultCount: {
+  listHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  listHeaderText: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  segmented: {
+    flexDirection: 'row',
+    backgroundColor: '#EDEAE4',
+    borderRadius: 12,
+    padding: 3,
+  },
+  segment: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 9,
+  },
+  segmentSelected: {
+    backgroundColor: '#FFFFFF',
+  },
+  segmentText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#64748B',
+    color: COLORS.muted,
+  },
+  segmentTextSelected: {
+    color: COLORS.text,
+  },
+  errorBanner: {
+    backgroundColor: COLORS.redSoft,
+    color: COLORS.red,
+    padding: 12,
+    borderRadius: 12,
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  warningBanner: {
+    backgroundColor: COLORS.amberSoft,
+    color: COLORS.amber,
+    padding: 12,
+    borderRadius: 12,
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  productCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    elevation: 2,
+    shadowColor: COLORS.text,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+  },
+  productCardInactive: {
+    opacity: 0.7,
+  },
+  productIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  productBody: {
+    flex: 1,
+    marginRight: 6,
+  },
+  productTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  productName: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginRight: 8,
+  },
+  productPrice: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: COLORS.coral,
+  },
+  productMeta: {
+    fontSize: 13,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 8,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginRight: 6,
+    marginTop: 4,
+  },
+  chipText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginTop: 12,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.muted,
+    textAlign: 'center',
+    marginTop: 6,
   },
   addButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EE6C52',
-    borderRadius: 10,
-    paddingVertical: 12,
-    marginBottom: 12,
+    backgroundColor: COLORS.coral,
+    marginHorizontal: 20,
+    marginBottom: 14,
+    paddingVertical: 14,
+    borderRadius: 16,
+    elevation: 4,
+    shadowColor: COLORS.coral,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
   },
   addButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: 'bold',
-    marginLeft: 8,
+    marginLeft: 6,
   },
-  errorMessage: {
-    color: '#B91C1C',
-    backgroundColor: '#FEE2E2',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 12,
-    fontSize: 12,
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
   },
-  productRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  },
+  sheet: {
+    backgroundColor: COLORS.background,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    maxHeight: '90%',
+    paddingTop: 10,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#D6D3CD',
     marginBottom: 10,
   },
-  card: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+  sheetHeader: {
     flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  cardIndicator: {
-    width: 4,
-  },
-  cardContent: {
-    flex: 1,
-    padding: 10,
-  },
-  rowTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
   },
-  nombreContainer: {
-    flex: 1.2,
+  sheetTitleBox: {
+    flex: 1,
+    marginRight: 12,
   },
-  productName: {
-    fontSize: 14,
+  sheetTitle: {
+    fontSize: 22,
     fontWeight: 'bold',
-    color: '#1E293B',
+    color: COLORS.text,
   },
-  loteText: {
-    fontSize: 11,
-    color: '#64748B',
+  sheetSubtitle: {
+    fontSize: 14,
+    color: COLORS.muted,
     marginTop: 2,
   },
-  stockContainer: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  stockLabel: {
-    fontSize: 11,
-    color: '#475569',
-  },
-  stockNumber: {
-    fontWeight: 'bold',
-    color: '#0F172A',
-  },
-  stockWarning: {
-    color: '#D97706',
-  },
-  precioContainer: {
-    flex: 1,
-    alignItems: 'flex-end',
-  },
-  precioText: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#0F172A',
-  },
-  badge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-    marginTop: 2,
-  },
-  badgeText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#E2E8F0',
-    marginVertical: 8,
-  },
-  rowBottom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  expiryContainer: {
-    flex: 1,
-  },
-  categoryContainer: {
-    flex: 1,
-    alignItems: 'flex-end',
-  },
-  productActions: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-    gap: 8,
-  },
-  editProductButton: {
-    width: 34,
-    height: 34,
-    flexShrink: 0,
-    borderRadius: 17,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deleteProductButton: {
-    width: 34,
-    height: 34,
-    flexShrink: 0,
-    borderRadius: 17,
-    backgroundColor: '#FEE2E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  metaLabel: {
-    fontSize: 9,
-    color: '#64748B',
-    fontWeight: 'bold',
-  },
-  metaValue: {
-    fontSize: 10,
-    color: '#334155',
-    marginTop: 1,
-  },
-  listContent: {
-    paddingBottom: 20,
-    flexGrow: 1,
-  },
-  emptyContainer: {
-    padding: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyText: {
-    marginTop: 10,
-    color: '#64748B',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  copyrightContainer: {
-    alignItems: 'center',
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
-  },
-  copyrightText: {
-    fontSize: 10,
-    color: '#64748B',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  legalLinks: {
-    fontSize: 10,
-    color: '#64748B',
-    textAlign: 'center',
-  },
-  formModalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 18,
-  },
-  formBackdrop: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-  },
-  formModalCard: {
-    width: '100%',
-    maxWidth: 480,
-    maxHeight: '90%',
+  closeCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 18,
-  },
-  formHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  formTitle: {
-    fontSize: 19,
-    fontWeight: 'bold',
-    color: '#0F172A',
-  },
-  filterModalCard: {
-    width: '100%',
-    maxWidth: 380,
-    maxHeight: '80%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-  },
-  filterSectionTitle: {
-    color: '#334155',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  filterOptions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  filterOption: {
-    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 8,
-    paddingVertical: 10,
+    borderColor: COLORS.border,
   },
-  filterOptionSelected: {
-    backgroundColor: '#CCFBF1',
-    borderColor: '#0F766E',
+  sheetContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 36,
   },
-  filterOptionText: {
-    color: '#64748B',
-    fontSize: 13,
-  },
-  filterOptionTextSelected: {
-    color: '#0F766E',
-    fontWeight: 'bold',
-  },
-  categoryFilterList: {
-    maxHeight: 180,
-  },
-  categoryFilterOption: {
-    minHeight: 42,
+  infoGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    paddingHorizontal: 4,
   },
-  filterModalActions: {
+  infoBox: {
+    width: '48.5%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  infoLabel: {
+    fontSize: 12,
+    color: COLORS.muted,
+    marginBottom: 4,
+  },
+  infoValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  infoValueStrong: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: COLORS.coral,
+  },
+  editButtonOutline: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 18,
-  },
-  clearFiltersButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 18,
-    borderRadius: 8,
-    backgroundColor: '#F1F5F9',
-  },
-  clearFiltersText: {
-    color: '#334155',
-    fontWeight: 'bold',
-  },
-  applyFiltersButton: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: COLORS.navy,
+    borderRadius: 14,
     paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#1B3A57',
+    marginTop: 4,
+    marginBottom: 22,
   },
-  applyFiltersText: {
-    color: '#FFFFFF',
+  editButtonOutlineText: {
+    color: COLORS.navy,
+    fontSize: 15,
     fontWeight: 'bold',
+    marginLeft: 8,
   },
-  formContent: {
-    paddingBottom: 8,
+  lotesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  lotesCount: {
+    fontSize: 13,
+    color: COLORS.muted,
+    fontWeight: '600',
+  },
+  emptyLotes: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderStyle: 'dashed',
+  },
+  emptyLotesTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginTop: 8,
+  },
+  emptyLotesText: {
+    fontSize: 13,
+    color: COLORS.muted,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  loteCard: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    marginBottom: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  loteStripe: {
+    width: 5,
+  },
+  loteBody: {
+    flex: 1,
+    padding: 14,
+  },
+  loteTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  loteNumero: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginRight: 8,
+  },
+  loteDatos: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  loteDato: {
+    flex: 1,
+  },
+  loteDatoValor: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  loteCosto: {
+    fontSize: 12,
+    color: COLORS.muted,
+    marginTop: 8,
+  },
+  loteAnterior: {
+    fontSize: 11,
+    color: COLORS.muted,
+    fontStyle: 'italic',
+    marginTop: 8,
+  },
+  field: {
+    marginBottom: 14,
   },
   inputLabel: {
-    color: '#334155',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
-    marginTop: 10,
+    color: COLORS.text,
     marginBottom: 6,
   },
+  optionalLabel: {
+    fontWeight: '400',
+    color: COLORS.muted,
+  },
   formInput: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    color: '#1E293B',
-    fontSize: 14,
     backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: COLORS.text,
   },
-  formInputDisabled: {
-    backgroundColor: '#F1F5F9',
-    color: '#64748B',
+  formInputError: {
+    borderColor: COLORS.red,
   },
-  disabledFieldHint: {
-    color: '#B45309',
-    fontSize: 11,
+  fieldError: {
+    color: COLORS.red,
+    fontSize: 12,
     marginTop: 5,
   },
-  formRow: {
+  suggestions: {
     flexDirection: 'row',
-    gap: 12,
+    flexWrap: 'wrap',
+    marginTop: -6,
+    marginBottom: 14,
   },
-  formColumn: {
-    flex: 1,
+  suggestionChip: {
+    backgroundColor: COLORS.navySoft,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    marginRight: 6,
+    marginTop: 6,
+  },
+  suggestionText: {
+    color: COLORS.navy,
+    fontSize: 13,
+    fontWeight: '600',
   },
   statusOptions: {
     flexDirection: 'row',
-    gap: 10,
+    justifyContent: 'space-between',
+    marginBottom: 22,
   },
   statusOption: {
-    flex: 1,
+    width: '48.5%',
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 11,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
     backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    padding: 12,
   },
   statusOptionSelected: {
-    borderColor: '#0F766E',
-    backgroundColor: '#CCFBF1',
+    borderColor: COLORS.green,
+    backgroundColor: COLORS.greenSoft,
+  },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  radioSelected: {
+    borderColor: COLORS.green,
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.green,
+  },
+  statusTextBox: {
+    flex: 1,
   },
   statusOptionText: {
-    color: '#64748B',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: COLORS.text,
   },
-  statusOptionTextSelected: {
-    color: '#0F766E',
+  statusHelp: {
+    fontSize: 11,
+    color: COLORS.muted,
+    marginTop: 2,
   },
   saveButton: {
+    backgroundColor: COLORS.coral,
+    borderRadius: 16,
+    paddingVertical: 16,
     alignItems: 'center',
-    backgroundColor: '#1B3A57',
-    borderRadius: 8,
-    paddingVertical: 13,
-    marginTop: 20,
   },
   saveButtonDisabled: {
     opacity: 0.6,
   },
   saveButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  confirmModalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  confirmBackdrop: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-  },
-  confirmCard: {
-    width: '100%',
-    maxWidth: 360,
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 22,
-  },
-  confirmIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FEE2E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  confirmTitle: {
-    color: '#0F172A',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  confirmMessage: {
-    color: '#64748B',
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  confirmActions: {
-    flexDirection: 'row',
-    width: '100%',
-    gap: 10,
-    marginTop: 20,
-  },
-  cancelDeleteButton: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#F1F5F9',
-  },
-  cancelDeleteText: {
-    color: '#334155',
-    fontWeight: 'bold',
-  },
-  confirmDeleteButton: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#DC2626',
-  },
-  confirmDeleteText: {
-    color: '#FFFFFF',
+    fontSize: 16,
     fontWeight: 'bold',
   },
   modalOverlay: {
@@ -1624,6 +1612,8 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
     overflow: 'hidden',
   },
   profileAvatarImage: {

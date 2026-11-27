@@ -11,6 +11,8 @@ import RecoveryCode from '../screens/RecoveryCode';
 import NewPassword from '../screens/NewPassword';
 import Home from '../screens/Home';
 import GestionInventario from '../screens/GestionInventario';
+import Compras from '../screens/Compras';
+import Clientes from '../screens/Clientes';
 import AnimatedSplash from '../components/AnimatedSplash';
 
 const Stack = createStackNavigator();
@@ -56,6 +58,16 @@ export default function Navigation() {
             <Stack.Screen
               name="Inventory"
               component={GestionInventario}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Purchases"
+              component={Compras}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Customers"
+              component={Clientes}
               options={{ headerShown: false }}
             />
           </>

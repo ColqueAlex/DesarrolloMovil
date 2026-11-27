@@ -5,13 +5,13 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   Modal,
   TouchableWithoutFeedback,
   Dimensions,
   Alert,
   Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
@@ -21,6 +21,24 @@ import ProfileRoleLabel from './ProfileRoleLabel';
 
 const { width } = Dimensions.get('window');
 
+// Paleta de la marca (colores del logo).
+const BRAND = {
+  coral: { icon: '#EE684D', bg: '#FDECE8' },
+  green: { icon: '#3E9B78', bg: '#E4F3EC' },
+  navy: { icon: '#254C7B', bg: '#E6EDF5' },
+};
+
+const WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+const MONTHS = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+
+const formatToday = () => {
+  const today = new Date();
+  return `${WEEKDAYS[today.getDay()]} ${today.getDate()} de ${MONTHS[today.getMonth()]}`;
+};
+
 export default function Home({ navigation }) {
   const [menuVisible, setMenuVisible] = useState(false);
   const [profileEditorVisible, setProfileEditorVisible] = useState(false);
@@ -29,7 +47,8 @@ export default function Home({ navigation }) {
 
   useEffect(() => {
     const user = auth?.currentUser;
-    if (!menuVisible || !user || !db) return undefined;
+    // Carga la foto al entrar (para el encabezado) y cada vez que se abre el menú.
+    if (!user || !db) return undefined;
 
     let cancelled = false;
     getDoc(doc(db, 'usuarios', user.uid))
@@ -40,7 +59,7 @@ export default function Home({ navigation }) {
       })
       .catch((error) => {
         console.error('Error al cargar la foto del perfil:', error);
-        if (!cancelled) {
+        if (!cancelled && menuVisible) {
           Alert.alert('No se pudo cargar la foto', 'Intenta abrir el menú nuevamente.');
         }
       });
@@ -54,6 +73,20 @@ export default function Home({ navigation }) {
     setMenuVisible(false);
     navigation.navigate('Inventory');
   };
+
+  const openPurchases = () => {
+    setMenuVisible(false);
+    navigation.navigate('Purchases');
+  };
+
+  const openCustomers = () => {
+    setMenuVisible(false);
+    navigation.navigate('Customers');
+  };
+
+  // Pantallas ya disponibles: id de la tarjeta -> acción.
+  const cardActions = { '1': openPurchases, '2': openInventory, '5': openCustomers };
+  const drawerActions = { Producto: openInventory, Compras: openPurchases };
 
   const handleLogOut = async () => {
     if (!auth) {
@@ -73,12 +106,11 @@ export default function Home({ navigation }) {
   const menuOptions = [
     {
       id: '1',
-      title: 'Registrar Compra',
+      title: 'Registrar compra',
       subtitle: 'Ingresos y proveedores',
       iconFamily: 'MaterialCommunityIcons',
       iconName: 'truck-delivery-outline',
-      bgColor: '#FDE8E8',
-      iconColor: '#E57373',
+      color: BRAND.coral,
     },
     {
       id: '2',
@@ -86,8 +118,7 @@ export default function Home({ navigation }) {
       subtitle: 'Stock y catálogo',
       iconFamily: 'MaterialCommunityIcons',
       iconName: 'cube-outline',
-      bgColor: '#E0F2F1',
-      iconColor: '#26A69A',
+      color: BRAND.green,
     },
     {
       id: '3',
@@ -95,17 +126,15 @@ export default function Home({ navigation }) {
       subtitle: 'Rebajas temporales',
       iconFamily: 'MaterialCommunityIcons',
       iconName: 'percent-outline',
-      bgColor: '#E0F2F1',
-      iconColor: '#26A69A',
+      color: BRAND.green,
     },
     {
       id: '4',
-      title: 'Registrar Promociones',
+      title: 'Registrar promociones',
       subtitle: 'Campañas y combos',
       iconFamily: 'MaterialCommunityIcons',
       iconName: 'bullhorn-outline',
-      bgColor: '#FDE8E8',
-      iconColor: '#E57373',
+      color: BRAND.navy,
     },
     {
       id: '5',
@@ -113,17 +142,15 @@ export default function Home({ navigation }) {
       subtitle: 'Saldos, pagos y movimientos',
       iconFamily: 'Ionicons',
       iconName: 'people-outline',
-      bgColor: '#FDE8E8',
-      iconColor: '#E57373',
+      color: BRAND.navy,
     },
     {
       id: '6',
       title: 'Apertura y cierre de caja',
-      subtitle: 'Abrir y cerrar la caja, registrar las ventas y finalizar la jornada',
+      subtitle: 'Control de caja y cierre diario',
       iconFamily: 'MaterialCommunityIcons',
       iconName: 'cash-register',
-      bgColor: '#E0F2F1',
-      iconColor: '#26A69A',
+      color: BRAND.coral,
     },
   ];
 
@@ -138,48 +165,72 @@ export default function Home({ navigation }) {
 
   const renderIcon = (family, name, color) => {
     if (family === 'MaterialCommunityIcons') {
-      return <MaterialCommunityIcons name={name} size={24} color={color} />;
+      return <MaterialCommunityIcons name={name} size={26} color={color} />;
     }
     if (family === 'Ionicons') {
-      return <Ionicons name={name} size={24} color={color} />;
+      return <Ionicons name={name} size={26} color={color} />;
     }
     return null;
   };
 
+  const firstName = (profileName || 'Usuario').trim().split(/\s+/)[0];
+  const initial = firstName.charAt(0).toUpperCase();
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
+        <View style={styles.topBar}>
           <TouchableOpacity
+            style={styles.iconButton}
             onPress={() => setMenuVisible(true)}
+            activeOpacity={0.7}
             accessibilityRole="button"
             accessibilityLabel="Abrir menú"
           >
-            <Ionicons name="menu-outline" size={36} color="#1E293B" />
+            <Ionicons name="menu-outline" size={26} color="#1E293B" />
           </TouchableOpacity>
 
-          <Image
-            source={require('../assets/logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-            accessibilityLabel="Almacén El Refugio"
-          />
+          <TouchableOpacity
+            style={styles.headerAvatar}
+            onPress={() => setProfileEditorVisible(true)}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Editar perfil"
+          >
+            {profileImageUri ? (
+              <Image source={{ uri: profileImageUri }} style={styles.headerAvatarImage} />
+            ) : (
+              <Text style={styles.headerAvatarInitial}>{initial}</Text>
+            )}
+          </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.mainCard} activeOpacity={0.8}>
-          <View style={styles.mainCardLeft}>
-            <View style={styles.mainIconContainer}>
-              <MaterialCommunityIcons name="package-variant-closed-check" size={26} color="#FFFFFF" />
-            </View>
-            <View style={styles.mainCardText}>
-              <Text style={styles.mainCardTitle}>Procesar Venta</Text>
-              <Text style={styles.mainCardSubtitle}>Cobrar y registrar salida de stock</Text>
-            </View>
+        <View style={styles.greeting}>
+          <Text style={styles.greetingTitle} numberOfLines={1}>
+            Hola, {firstName} 👋
+          </Text>
+          <Text style={styles.greetingDate}>{formatToday()}</Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.mainCard}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Procesar venta"
+        >
+          <View style={styles.mainIconContainer}>
+            <MaterialCommunityIcons name="cart-arrow-right" size={28} color="#FFFFFF" />
+          </View>
+          <View style={styles.mainCardText}>
+            <Text style={styles.mainCardTitle}>Procesar venta</Text>
+            <Text style={styles.mainCardSubtitle}>Cobrar y registrar salida de stock</Text>
           </View>
           <View style={styles.arrowCircle}>
-            <Ionicons name="arrow-forward" size={20} color="#E55B4C" />
+            <Ionicons name="arrow-forward" size={20} color="#EE684D" />
           </View>
         </TouchableOpacity>
+
+        <Text style={styles.sectionTitle}>Accesos rápidos</Text>
 
         <View style={styles.gridContainer}>
           {menuOptions.map((item) => (
@@ -187,18 +238,17 @@ export default function Home({ navigation }) {
               key={item.id}
               style={styles.gridCard}
               activeOpacity={0.7}
-              onPress={item.id === '2' ? openInventory : undefined}
-              accessibilityRole={item.id === '2' ? 'button' : undefined}
-              accessibilityLabel={item.id === '2' ? 'Abrir productos del almacén' : undefined}
+              onPress={cardActions[item.id]}
+              accessibilityRole="button"
+              accessibilityLabel={item.title}
             >
-              <View style={styles.gridHeader}>
-                <View style={[styles.gridIconContainer, { backgroundColor: item.bgColor }]}>
-                  {renderIcon(item.iconFamily, item.iconName, item.iconColor)}
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+              <View style={[styles.gridIconContainer, { backgroundColor: item.color.bg }]}>
+                {renderIcon(item.iconFamily, item.iconName, item.color.icon)}
               </View>
-              <Text style={styles.gridTitle}>{item.title}</Text>
-              <Text style={styles.gridSubtitle}>{item.subtitle}</Text>
+              <View>
+                <Text style={styles.gridTitle} numberOfLines={2}>{item.title}</Text>
+                <Text style={styles.gridSubtitle} numberOfLines={2}>{item.subtitle}</Text>
+              </View>
             </TouchableOpacity>
           ))}
         </View>
@@ -245,8 +295,8 @@ export default function Home({ navigation }) {
                   key={item.id}
                   style={styles.drawerButton}
                   activeOpacity={0.7}
-                  onPress={item.title === 'Producto' ? openInventory : undefined}
-                  accessibilityRole={item.title === 'Producto' ? 'button' : undefined}
+                  onPress={drawerActions[item.title]}
+                  accessibilityRole={drawerActions[item.title] ? 'button' : undefined}
                 >
                   <View style={styles.drawerIconBox}>
                     <MaterialCommunityIcons name={item.icon} size={22} color="#FFFFFF" />
@@ -301,64 +351,108 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 15,
-    paddingBottom: 30,
+    paddingTop: 8,
+    paddingBottom: 32,
   },
-  header: {
+  topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 80,
+    marginBottom: 20,
   },
-  logo: {
-    width: 170,
-    height: 88,
+  iconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EEF1EF',
+  },
+  headerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#254C7B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  headerAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  headerAvatarInitial: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  greeting: {
+    marginBottom: 22,
+  },
+  greetingTitle: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: '#1E293B',
+  },
+  greetingDate: {
+    fontSize: 14,
+    color: '#64748B',
+    marginTop: 4,
   },
   mainCard: {
-    backgroundColor: '#EE6C52',
-    borderRadius: 20,
-    padding: 20,
+    backgroundColor: '#EE684D',
+    borderRadius: 22,
+    paddingVertical: 20,
+    paddingHorizontal: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 60,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-  },
-  mainCardLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
+    marginBottom: 28,
+    elevation: 6,
+    shadowColor: '#EE684D',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
   },
   mainIconContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-    padding: 10,
-    borderRadius: 14,
-    marginRight: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
   },
   mainCardText: {
     flex: 1,
   },
   mainCardTitle: {
     color: '#FFFFFF',
-    fontSize: 17,
+    fontSize: 19,
     fontWeight: 'bold',
   },
   mainCardSubtitle: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 11,
-    marginTop: 2,
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
+    marginTop: 3,
   },
   arrowCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
+    marginLeft: 10,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#1E293B',
+    marginBottom: 14,
   },
   gridContainer: {
     flexDirection: 'row',
@@ -368,36 +462,37 @@ const styles = StyleSheet.create({
   gridCard: {
     backgroundColor: '#FFFFFF',
     width: '48%',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 25,
+    minHeight: 150,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 14,
     justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#EEF1EF',
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-  },
-  gridHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
+    shadowColor: '#1E293B',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
   },
   gridIconContainer: {
-    padding: 8,
-    borderRadius: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
   },
   gridTitle: {
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: 'bold',
     color: '#1E293B',
     marginBottom: 4,
   },
   gridSubtitle: {
-    fontSize: 10,
-    color: '#94A3B8',
-    lineHeight: 13,
+    fontSize: 12,
+    color: '#64748B',
+    lineHeight: 16,
   },
   modalOverlay: {
     flex: 1,
