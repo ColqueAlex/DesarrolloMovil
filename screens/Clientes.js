@@ -25,6 +25,13 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
+import {
+  claveTexto,
+  limpiarEspacios,
+  validarMonto,
+  validarNombrePersona,
+  validarTelefonoAR,
+} from '../src/utils/validaciones';
 
 /*
  * Cuentas de clientes.
@@ -69,18 +76,18 @@ const ESTILO_MOVIMIENTO = {
 };
 
 // "  José   Pérez " -> "jose perez" (sin tildes, minúsculas, un solo espacio).
-const claveNombre = (nombre) => String(nombre ?? '')
-  .normalize('NFD')
-  .replace(/[̀-ͯ]/g, '')
-  .toLocaleLowerCase()
-  .replace(/\s+/g, ' ')
-  .trim()
-  .replace(/\//g, '-');
+// Se usa como id del documento que reserva el nombre.
+const claveNombre = (nombre) => claveTexto(nombre).replace(/\//g, '-');
 
-const limpiarNombre = (nombre) => String(nombre ?? '').replace(/\s+/g, ' ').trim();
+const limpiarNombre = limpiarEspacios;
+
+// Escribe cada palabra con mayúscula inicial: "maría  pérez" -> "María Pérez".
+const capitalizarNombre = (nombre) => limpiarNombre(nombre)
+  .split(' ')
+  .map((palabra) => palabra.charAt(0).toLocaleUpperCase() + palabra.slice(1))
+  .join(' ');
 
 const redondear = (valor) => Math.round(valor * 100) / 100;
-const parsearMonto = (texto) => Number(String(texto).trim().replace(',', '.'));
 
 const formatearPrecio = (valor) => {
   const numero = Number(valor);
@@ -174,7 +181,10 @@ export default function Clientes({ navigation }) {
         if (filtro === 'DEUDA' && saldo <= 0) return false;
         if (filtro === 'AL_DIA' && saldo > 0) return false;
         if (!consulta) return true;
-        return claveNombre(item.nombre).includes(consulta) || String(item.telefono ?? '').includes(busqueda.trim());
+        const digitosBusqueda = busqueda.replace(/\D/g, '');
+        const digitosTelefono = String(item.telefono ?? '').replace(/\D/g, '');
+        return claveNombre(item.nombre).includes(consulta)
+          || (digitosBusqueda.length >= 3 && digitosTelefono.includes(digitosBusqueda));
       })
       .sort((a, b) => {
         const porSaldo = (Number(b.saldo) || 0) - (Number(a.saldo) || 0);
@@ -209,23 +219,27 @@ export default function Clientes({ navigation }) {
 
   const guardarCliente = async () => {
     const errores = {};
-    const nombre = limpiarNombre(form.nombre);
+    const nombre = capitalizarNombre(form.nombre);
     const clave = claveNombre(nombre);
-    const telefono = form.telefono.trim();
-    const saldoTexto = form.saldoInicial.trim();
-    const saldoInicial = saldoTexto ? redondear(parsearMonto(saldoTexto)) : 0;
+    const telefonoValidado = validarTelefonoAR(form.telefono);
+    const saldoValidado = validarMonto(form.saldoInicial, {
+      etiqueta: 'la deuda actual',
+      obligatorio: false,
+      permitirCero: true,
+    });
+    const telefono = telefonoValidado.valor;
+    const saldoInicial = saldoValidado.valor;
 
-    if (!nombre) errores.nombre = 'Ingresa el nombre del cliente.';
-    else if (!/\p{L}/u.test(nombre)) errores.nombre = 'El nombre debe incluir letras.';
+    const errorNombre = validarNombrePersona(nombre, {
+      etiqueta: 'el nombre del cliente',
+      minimo: 3,
+      maximo: 60,
+    });
+    if (errorNombre) errores.nombre = errorNombre;
     else if (nombreRepetido) errores.nombre = `Ya existe un cliente llamado "${nombreRepetido.nombre}".`;
 
-    if (telefono && !/^\+?[\d\s-]{6,20}$/.test(telefono)) {
-      errores.telefono = 'Solo números, espacios, guiones y + al inicio.';
-    }
-
-    if (saldoTexto && (!Number.isFinite(saldoInicial) || saldoInicial < 0)) {
-      errores.saldoInicial = 'Debe ser un número igual o mayor que 0.';
-    }
+    if (telefonoValidado.error) errores.telefono = telefonoValidado.error;
+    if (saldoValidado.error) errores.saldoInicial = saldoValidado.error;
 
     if (Object.keys(errores).length > 0) {
       setErroresForm(errores);
@@ -296,13 +310,13 @@ export default function Clientes({ navigation }) {
     setModoPago(true);
   };
 
-  const montoIngresado = parsearMonto(montoPago);
+  const montoIngresado = validarMonto(montoPago).valor ?? 0;
   const saldoRestante = Number.isFinite(montoIngresado) ? redondear(saldoCliente - montoIngresado) : saldoCliente;
 
   const confirmarPago = async () => {
-    const monto = redondear(parsearMonto(montoPago));
-    if (!montoPago.trim() || !Number.isFinite(monto) || monto <= 0) {
-      setErrorPago('Ingresa un monto mayor que 0.');
+    const { error: errorMonto, valor: monto } = validarMonto(montoPago, { etiqueta: 'el monto del pago' });
+    if (errorMonto) {
+      setErrorPago(errorMonto);
       return;
     }
     if (monto > saldoCliente) {
@@ -467,10 +481,10 @@ export default function Clientes({ navigation }) {
                   setMontoPago(valor);
                   setErrorPago('');
                 }}
-                placeholder="0.00"
+                placeholder="0,00"
                 placeholderTextColor="#94A3B8"
                 keyboardType="decimal-pad"
-                maxLength={12}
+                maxLength={15}
                 autoFocus
                 editable={!pagando}
               />
@@ -716,7 +730,7 @@ export default function Clientes({ navigation }) {
                   placeholder="Ej.: María González"
                   placeholderTextColor="#94A3B8"
                   autoCapitalize="words"
-                  maxLength={80}
+                  maxLength={60}
                   editable={!guardando}
                 />
                 {erroresForm.nombre || nombreRepetido ? (
@@ -730,7 +744,7 @@ export default function Clientes({ navigation }) {
                 campo: 'telefono',
                 etiqueta: 'Teléfono',
                 opcional: true,
-                placeholder: 'Ej.: +56 9 1234 5678',
+                placeholder: 'Ej.: 11 2345-6789',
                 keyboardType: 'phone-pad',
                 maxLength: 20,
               })}
@@ -739,9 +753,9 @@ export default function Clientes({ navigation }) {
                 campo: 'saldoInicial',
                 etiqueta: 'Deuda actual',
                 opcional: true,
-                placeholder: '0.00',
+                placeholder: 'Ej.: 2500 o 2500,50',
                 keyboardType: 'decimal-pad',
-                maxLength: 12,
+                maxLength: 15,
               })}
               <Text style={styles.helpText}>
                 Si el cliente ya te debe algo (por ejemplo, de tu cuaderno), ingrésalo aquí.

@@ -18,6 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { verifyBeforeUpdateEmail } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
+import { formatearDNI, validarEmail, validarTelefonoAR } from '../src/utils/validaciones';
 
 // Se pueden cambiar la foto de perfil, el teléfono y el correo. Nombre,
 // apellido y DNI se muestran pero no se pueden editar.
@@ -131,21 +132,12 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
 
   const saveProfile = async () => {
     const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPhone = phone.trim().replace(/\s+/g, ' ');
-    let hasErrors = false;
-
-    if (trimmedPhone && !/^\+?[\d\s-]{6,20}$/.test(trimmedPhone)) {
-      setPhoneError('Solo números, espacios, guiones y + al inicio (mínimo 6 dígitos).');
-      hasErrors = true;
-    }
-    if (!trimmedEmail) {
-      setEmailError('Ingresa tu correo electrónico.');
-      hasErrors = true;
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setEmailError('Ingresa un correo electrónico válido.');
-      hasErrors = true;
-    }
-    if (hasErrors) return;
+    const phoneResult = validarTelefonoAR(phone);
+    const trimmedPhone = phoneResult.valor;
+    const emailErrorMessage = validarEmail(trimmedEmail);
+    if (phoneResult.error) setPhoneError(phoneResult.error);
+    if (emailErrorMessage) setEmailError(emailErrorMessage);
+    if (phoneResult.error || emailErrorMessage) return;
 
     const user = auth?.currentUser;
     if (!user) {
@@ -267,7 +259,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
             {[
               ['Nombre', readOnlyData.nombre],
               ['Apellido', readOnlyData.apellido],
-              ['DNI', readOnlyData.dni],
+              ['DNI', formatearDNI(readOnlyData.dni)],
             ].map(([label, value]) => (
               <View key={label}>
                 <Text style={styles.label}>{label}</Text>
@@ -293,7 +285,7 @@ export default function ProfileEditModal({ visible, initialName, onClose, onSave
                 setPhoneTouched(true);
                 if (phoneError) setPhoneError('');
               }}
-              placeholder="Tu número de teléfono"
+              placeholder="Ej.: 11 2345-6789"
               placeholderTextColor="#94A3B8"
               keyboardType="phone-pad"
               maxLength={20}

@@ -24,6 +24,15 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
+import {
+  fechaTextoAISO,
+  hoyISO,
+  isoDentroDeAnios,
+  parsearMonto,
+  validarCantidad,
+  validarMonto,
+  validarNumeroLote,
+} from '../src/utils/validaciones';
 
 /*
  * Registro de compras.
@@ -75,12 +84,8 @@ const formatearPrecio = (valor) => {
 
 const redondear = (valor) => Math.round(valor * 100) / 100;
 
-const pad = (numero) => String(numero).padStart(2, '0');
+const ANIOS_MAX_VENCIMIENTO = 10;
 
-const hoyISO = () => {
-  const hoy = new Date();
-  return `${hoy.getFullYear()}-${pad(hoy.getMonth() + 1)}-${pad(hoy.getDate())}`;
-};
 
 // 'AAAA-MM-DD' -> 'DD/MM/AAAA'
 const isoADisplay = (iso) => {
@@ -96,17 +101,6 @@ const mascaraFecha = (texto) => {
   return `${digitos.slice(0, 2)}/${digitos.slice(2, 4)}/${digitos.slice(4)}`;
 };
 
-// 'DD/MM/AAAA' -> 'AAAA-MM-DD' o null si no es una fecha real.
-const displayAISO = (texto) => {
-  const partes = String(texto ?? '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!partes) return null;
-  const [, dia, mes, anio] = partes.map(Number);
-  const fecha = new Date(anio, mes - 1, dia);
-  if (fecha.getFullYear() !== anio || fecha.getMonth() !== mes - 1 || fecha.getDate() !== dia) {
-    return null;
-  }
-  return `${anio}-${pad(mes)}-${pad(dia)}`;
-};
 
 const fechaLarga = (iso) => {
   const partes = String(iso ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -114,7 +108,6 @@ const fechaLarga = (iso) => {
   return `${Number(partes[3])} de ${MONTHS[Number(partes[2]) - 1]} de ${partes[1]}`;
 };
 
-const parsearNumero = (texto) => Number(String(texto).trim().replace(',', '.'));
 
 export default function Compras({ navigation }) {
   const [compras, setCompras] = useState([]);
@@ -296,15 +289,16 @@ export default function Compras({ navigation }) {
 
   const guardarItem = () => {
     const errores = {};
-    const numeroLote = itemForm.numeroLote.trim().toUpperCase();
-    const cantidad = parsearNumero(itemForm.cantidad);
-    const costoUnitario = parsearNumero(itemForm.costoUnitario);
+    const lote = validarNumeroLote(itemForm.numeroLote);
+    const cantidadValidada = validarCantidad(itemForm.cantidad);
+    const costoValidado = validarMonto(itemForm.costoUnitario, { etiqueta: 'el costo unitario' });
+    const numeroLote = lote.valor;
+    const cantidad = cantidadValidada.valor;
+    const costoUnitario = costoValidado.valor;
     let fechaVencimiento = '';
 
-    if (!numeroLote) {
-      errores.numeroLote = 'Ingresa el número de lote.';
-    } else if (!/^[A-Z0-9-]+$/.test(numeroLote)) {
-      errores.numeroLote = 'Solo letras, números y guiones, sin espacios.';
+    if (lote.error) {
+      errores.numeroLote = lote.error;
     } else {
       const productoId = productoSeleccionado.id;
       const yaExiste = (lotesPorProducto[productoId] ?? []).includes(normalizar(numeroLote));
@@ -317,17 +311,18 @@ export default function Compras({ navigation }) {
       else if (repetidoEnCompra) errores.numeroLote = 'Ese lote ya está en esta compra.';
     }
 
-    if (!itemForm.cantidad.trim()) errores.cantidad = 'Ingresa la cantidad.';
-    else if (!Number.isInteger(cantidad) || cantidad <= 0) errores.cantidad = 'Número entero mayor que 0.';
+    if (cantidadValidada.error) errores.cantidad = cantidadValidada.error;
+    if (costoValidado.error) errores.costoUnitario = costoValidado.error;
 
-    if (!itemForm.costoUnitario.trim()) errores.costoUnitario = 'Ingresa el costo.';
-    else if (!Number.isFinite(costoUnitario) || costoUnitario <= 0) errores.costoUnitario = 'Debe ser mayor que 0.';
-
-    if (itemForm.vencimiento.trim()) {
-      const iso = displayAISO(itemForm.vencimiento.trim());
+    if (!itemForm.vencimiento.trim()) {
+      errores.vencimiento = 'Ingresa la fecha de vencimiento.';
+    } else {
+      const iso = fechaTextoAISO(itemForm.vencimiento);
       if (!iso) errores.vencimiento = 'Fecha inválida. Usa DD/MM/AAAA.';
       else if (iso <= hoyISO()) errores.vencimiento = 'Debe ser posterior a hoy.';
-      else fechaVencimiento = iso;
+      else if (iso > isoDentroDeAnios(ANIOS_MAX_VENCIMIENTO)) {
+        errores.vencimiento = `No puede ser más de ${ANIOS_MAX_VENCIMIENTO} años en el futuro.`;
+      } else fechaVencimiento = iso;
     }
 
     if (Object.keys(errores).length > 0) {
@@ -356,13 +351,17 @@ export default function Compras({ navigation }) {
   };
 
   const confirmarCompra = async () => {
-    const fecha = displayAISO(fechaCompra.trim());
+    const fecha = fechaTextoAISO(fechaCompra);
     if (!fecha) {
       setErrorFecha('Fecha inválida. Usa DD/MM/AAAA.');
       return;
     }
     if (fecha > hoyISO()) {
       setErrorFecha('La fecha de compra no puede ser futura.');
+      return;
+    }
+    if (fecha < isoDentroDeAnios(-1)) {
+      setErrorFecha('La fecha de compra no puede tener más de un año de antigüedad.');
       return;
     }
     if (items.length === 0) return;
@@ -613,8 +612,11 @@ export default function Compras({ navigation }) {
   );
 
   const renderPasoItem = () => {
-    const cantidad = parsearNumero(itemForm.cantidad);
-    const costo = parsearNumero(itemForm.costoUnitario);
+    const cantidad = /^\d+$/.test(itemForm.cantidad.trim()) ? Number(itemForm.cantidad) : NaN;
+    const costo = parsearMonto(itemForm.costoUnitario);
+    const precioVenta = Number(productoSeleccionado?.precio);
+    const costoSuperaVenta = Number.isFinite(costo) && Number.isFinite(precioVenta) && precioVenta > 0
+      && costo >= precioVenta;
     const subtotal = Number.isFinite(cantidad) && Number.isFinite(costo) ? cantidad * costo : 0;
 
     return (
@@ -651,23 +653,23 @@ export default function Compras({ navigation }) {
               etiqueta: 'Cantidad',
               placeholder: '0',
               keyboardType: 'number-pad',
-              maxLength: 7,
+              maxLength: 6,
             })}
           </View>
           <View style={styles.formColumn}>
             {renderCampoItem({
               campo: 'costoUnitario',
               etiqueta: 'Costo unitario',
-              placeholder: '0.00',
+              placeholder: 'Ej.: 850,50',
               keyboardType: 'decimal-pad',
-              maxLength: 12,
+              maxLength: 15,
             })}
           </View>
         </View>
 
         <View style={styles.field}>
           <Text style={styles.inputLabel}>
-            Fecha de vencimiento<Text style={styles.optionalLabel}> (opcional)</Text>
+            Fecha de vencimiento
           </Text>
           <TextInput
             style={[styles.formInput, erroresItem.vencimiento && styles.formInputError]}
@@ -685,6 +687,12 @@ export default function Compras({ navigation }) {
           <Text style={styles.mutedText}>Subtotal</Text>
           <Text style={styles.subtotalValue}>{formatearPrecio(subtotal > 0 ? subtotal : 0)}</Text>
         </View>
+        {costoSuperaVenta ? (
+          <Text style={styles.warningText}>
+            Ojo: el costo es igual o mayor que el precio de venta ({formatearPrecio(precioVenta)}).
+            Puedes guardarlo igual, pero no dejaría ganancia.
+          </Text>
+        ) : null}
 
         <TouchableOpacity style={styles.saveButton} onPress={guardarItem} accessibilityRole="button">
           <Text style={styles.saveButtonText}>
@@ -1189,6 +1197,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.navySoft,
     borderRadius: 14,
     padding: 14,
+    marginBottom: 18,
+  },
+  warningText: {
+    color: '#B7791F',
+    backgroundColor: '#FDF3E1',
+    fontSize: 13,
+    padding: 12,
+    borderRadius: 12,
+    marginTop: -8,
     marginBottom: 18,
   },
   subtotalValue: {

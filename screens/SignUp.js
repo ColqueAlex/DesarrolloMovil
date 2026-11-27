@@ -21,6 +21,12 @@ import {
 } from 'firebase/auth';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
+import {
+  limpiarEspacios,
+  validarDNI,
+  validarEmail,
+  validarNombrePersona,
+} from '../src/utils/validaciones';
 
 export default function SignUp({ navigation }) {
   const [firstName, setFirstName] = useState('');
@@ -65,39 +71,29 @@ export default function SignUp({ navigation }) {
       confirmPassword: '',
     };
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const dniRegex = /^\d{7,8}$/;
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
 
-    if (!firstName.trim()) {
-      errors.firstName = 'Ingresa tu nombre.';
-      valid = false;
-    } else if (firstName.trim().length < 2) {
-      errors.firstName = 'El nombre debe tener al menos 2 caracteres.';
+    const firstNameError = validarNombrePersona(firstName, { etiqueta: 'tu nombre' });
+    if (firstNameError) {
+      errors.firstName = firstNameError;
       valid = false;
     }
 
-    if (!lastName.trim()) {
-      errors.lastName = 'Ingresa tu apellido.';
-      valid = false;
-    } else if (lastName.trim().length < 2) {
-      errors.lastName = 'El apellido debe tener al menos 2 caracteres.';
+    const lastNameError = validarNombrePersona(lastName, { etiqueta: 'tu apellido' });
+    if (lastNameError) {
+      errors.lastName = lastNameError;
       valid = false;
     }
 
-    if (!dni.trim()) {
-      errors.dni = 'Ingresa tu número de DNI.';
-      valid = false;
-    } else if (!dniRegex.test(dni.trim())) {
-      errors.dni = 'El DNI debe contener entre 7 y 8 dígitos numéricos (sin puntos).';
+    const dniResult = validarDNI(dni);
+    if (dniResult.error) {
+      errors.dni = dniResult.error;
       valid = false;
     }
 
-    if (!email.trim()) {
-      errors.email = 'Ingresa tu correo electrónico.';
-      valid = false;
-    } else if (!emailRegex.test(email.trim())) {
-      errors.email = 'El formato del correo no es válido (ej. usuario@correo.com).';
+    const emailError = validarEmail(email);
+    if (emailError) {
+      errors.email = emailError;
       valid = false;
     }
 
@@ -130,6 +126,10 @@ export default function SignUp({ navigation }) {
       return;
     }
 
+    const cleanFirstName = limpiarEspacios(firstName);
+    const cleanLastName = limpiarEspacios(lastName);
+    const cleanDni = validarDNI(dni).valor;
+
     setLoading(true);
     try {
       const credential = await createUserWithEmailAndPassword(
@@ -140,14 +140,14 @@ export default function SignUp({ navigation }) {
 
       try {
         await updateProfile(credential.user, {
-          displayName: `${firstName.trim()} ${lastName.trim()}`,
+          displayName: `${cleanFirstName} ${cleanLastName}`,
         });
         await setDoc(doc(db, 'usuarios', credential.user.uid), {
           uid: credential.user.uid,
-          nombre: firstName.trim(),
-          apellido: lastName.trim(),
-          dni: dni.trim(),
-          nombreCompleto: `${firstName.trim()} ${lastName.trim()}`,
+          nombre: cleanFirstName,
+          apellido: cleanLastName,
+          dni: cleanDni,
+          nombreCompleto: `${cleanFirstName} ${cleanLastName}`,
           telefono: '',
           email: email.trim(),
           rol: 'usuario',
@@ -282,6 +282,8 @@ export default function SignUp({ navigation }) {
             <TextInput
               style={styles.input}
               placeholder="Ej. Juan"
+              maxLength={50}
+              autoCapitalize="words"
               placeholderTextColor="#64748B"
               value={firstName}
               onChangeText={(text) => {
@@ -323,6 +325,8 @@ export default function SignUp({ navigation }) {
             <TextInput
               style={styles.input}
               placeholder="Ej. Pérez"
+              maxLength={50}
+              autoCapitalize="words"
               placeholderTextColor="#64748B"
               value={lastName}
               onChangeText={(text) => {

@@ -29,6 +29,14 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { auth, db } from '../src/config/firebaseConfig';
+import {
+  claveTexto,
+  limpiarEspacios,
+  validarCategoria,
+  validarMarca,
+  validarMonto,
+  validarNombreProducto,
+} from '../src/utils/validaciones';
 import ProfileEditModal from './ProfileEditModal';
 import ProfileRoleLabel from './ProfileRoleLabel';
 
@@ -85,8 +93,6 @@ const FORMULARIO_VACIO = {
   estado: 'ACTIVO',
 };
 
-const contieneLetras = (valor) => /\p{L}/u.test(valor);
-const categoriaValida = (valor) => /^[\p{L}\p{M}\s]+$/u.test(valor);
 const normalizar = (valor) => String(valor ?? '').trim().toLocaleLowerCase();
 
 const formatearPrecio = (valor) => {
@@ -336,30 +342,36 @@ export default function GestionInventario({ navigation }) {
 
   const validarFormulario = () => {
     const errores = {};
-    const nombre = formulario.nombre.trim();
-    const categoria = formulario.categoria.trim();
-    const marca = formulario.marca.trim();
-    const precioTexto = formulario.precio.trim().replace(',', '.');
-    const precio = Number(precioTexto);
+    const nombre = limpiarEspacios(formulario.nombre);
+    const marca = limpiarEspacios(formulario.marca);
+    let categoria = limpiarEspacios(formulario.categoria);
+    const precio = validarMonto(formulario.precio, { etiqueta: 'el precio de venta' });
 
-    if (!nombre) errores.nombre = 'Ingresa el nombre del producto.';
-    else if (!contieneLetras(nombre)) errores.nombre = 'El nombre debe incluir al menos una letra.';
+    const errorNombre = validarNombreProducto(nombre);
+    if (errorNombre) errores.nombre = errorNombre;
 
-    if (!categoria) errores.categoria = 'Ingresa o elige una categoría.';
-    else if (!categoriaValida(categoria)) errores.categoria = 'Solo letras y espacios.';
+    const errorCategoria = validarCategoria(categoria);
+    if (errorCategoria) errores.categoria = errorCategoria;
 
-    if (marca && !contieneLetras(marca)) errores.marca = 'La marca debe incluir al menos una letra.';
+    const errorMarca = validarMarca(marca);
+    if (errorMarca) errores.marca = errorMarca;
 
-    if (!precioTexto) errores.precio = 'Ingresa el precio de venta.';
-    else if (!Number.isFinite(precio) || precio <= 0) errores.precio = 'Debe ser un número mayor que cero.';
+    if (precio.error) errores.precio = precio.error;
 
     if (!errores.nombre) {
       const duplicado = productos.find((producto) => (
         producto.id !== productoEditando?.id
-        && normalizar(producto.nombre) === normalizar(nombre)
-        && normalizar(producto.marca) === normalizar(marca)
+        && claveTexto(producto.nombre) === claveTexto(nombre)
+        && claveTexto(producto.marca) === claveTexto(marca)
       ));
       if (duplicado) errores.nombre = 'Ya existe un producto con ese nombre y marca.';
+    }
+
+    // Reutiliza la categoría existente si es la misma escrita distinto
+    // ("abarrotes" -> "Abarrotes") para no duplicar categorías.
+    if (!errores.categoria) {
+      const existente = categorias.find((item) => claveTexto(item) === claveTexto(categoria));
+      categoria = existente ?? categoria.charAt(0).toLocaleUpperCase() + categoria.slice(1);
     }
 
     return {
@@ -368,7 +380,7 @@ export default function GestionInventario({ navigation }) {
         nombre,
         categoria,
         marca,
-        precio: Math.round(precio * 100) / 100,
+        precio: precio.valor,
         estado: formulario.estado,
       },
     };
@@ -836,15 +848,15 @@ export default function GestionInventario({ navigation }) {
               {renderCampo({
                 campo: 'nombre',
                 etiqueta: 'Nombre',
-                placeholder: 'Ej.: Arroz grado 1, 1 kg',
-                maxLength: 100,
+                placeholder: 'Ej.: Arroz largo fino 1 kg',
+                maxLength: 80,
               })}
 
               {renderCampo({
                 campo: 'categoria',
                 etiqueta: 'Categoría',
-                placeholder: 'Ej.: Abarrotes',
-                maxLength: 60,
+                placeholder: 'Ej.: Almacén',
+                maxLength: 40,
               })}
               {sugerenciasCategoria.length > 0 ? (
                 <View style={styles.suggestions}>
@@ -865,17 +877,17 @@ export default function GestionInventario({ navigation }) {
               {renderCampo({
                 campo: 'marca',
                 etiqueta: 'Marca',
-                placeholder: 'Ej.: Tucapel',
+                placeholder: 'Ej.: Gallo',
                 opcional: true,
-                maxLength: 60,
+                maxLength: 40,
               })}
 
               {renderCampo({
                 campo: 'precio',
                 etiqueta: 'Precio de venta',
-                placeholder: '0.00',
+                placeholder: 'Ej.: 1500 o 1500,50',
                 keyboardType: 'decimal-pad',
-                maxLength: 12,
+                maxLength: 15,
               })}
 
               <Text style={styles.inputLabel}>Estado</Text>
